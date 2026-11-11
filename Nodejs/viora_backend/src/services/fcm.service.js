@@ -1,16 +1,36 @@
 const admin = require('firebase-admin');
+const fs = require('fs');
 const path = require('path');
 const Account = require('../models/account.model');
 
 let isInitialized = false;
 
 try {
-  const serviceAccountPath = path.join(__dirname, '../firebase-service-account.json');
-  const serviceAccount = require(serviceAccountPath);
+  let serviceAccount = null;
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT.replace(/^\uFEFF/, ''));
+  } else {
+    const candidatePaths = [
+      '/etc/secrets/firebase-service-account.json',
+      path.join(__dirname, '../../firebase-service-account.json'),
+      path.join(__dirname, '../firebase-service-account.json'),
+    ];
+    const foundPath = candidatePaths.find((p) => fs.existsSync(p));
+    if (foundPath) {
+      serviceAccount = JSON.parse(fs.readFileSync(foundPath, 'utf8').replace(/^\uFEFF/, ''));
+    }
+  }
+
+  if (!serviceAccount) {
+    throw new Error('Firebase service account not found in /etc/secrets, root, src, or FIREBASE_SERVICE_ACCOUNT');
+  }
+
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+  }
   isInitialized = true;
   console.log('✅ Firebase Admin SDK initialized successfully!');
 } catch (err) {
