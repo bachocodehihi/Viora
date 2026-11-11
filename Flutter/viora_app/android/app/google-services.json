@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "769469246694",
+    "project_id": "viora-ed2b1",
+    "storage_bucket": "viora-ed2b1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:769469246694:android:8b924a2a42deec81be5f27",
+        "android_client_info": {
+          "package_name": "com.example.viora_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "769469246694-7a0od628u1gjth8oeoe38ia59m18rqpg.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.viora_app",
+            "certificate_hash": "42bb5b706d3ff7412c93590bc3444bef7379dd36"
+          }
+        },
+        {
+          "client_id": "769469246694-bkbddlqv6vdlmhm2aqpnfien89ini66k.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDUiynk4uwxmonp36fi5ae7iptsiYsLczs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "769469246694-bkbddlqv6vdlmhm2aqpnfien89ini66k.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

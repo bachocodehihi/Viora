@@ -1,0 +1,17 @@
+# Workspace & OS
+scratch/
+.DS_Store
+Thumbs.db
+*.log
+
+# Gradle & Android build caches
+**/.gradle/
+**/android/build/
+
+# Environment & Secret files
+.env
+.env.*
+!.env.example
+*service-account*.json
+*serviceAccountKey*.json
+firebase-service-account.json

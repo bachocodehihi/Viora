@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#FFFFFF</color>
+
+    <!-- Incoming/ongoing call notification palette (aligned with Viora IncomingCallScreen) -->
+    <color name="accept">#22C55E</color>
+    <color name="accept_ripple">#86EFAC</color>
+    <color name="decline">#EF4444</color>
+    <color name="decline_ripple">#FCA5A5</color>
+
+    <color name="action_text">#FFFFFF</color>
+    <color name="ripple_main_color">#80FFFFFF</color>
+</resources>

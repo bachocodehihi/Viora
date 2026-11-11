@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="text_accept">Trả lời</string>
+    <string name="text_decline">Từ chối</string>
+    <string name="text_missed_call">Cuộc gọi nhỡ</string>
+    <string name="text_call_back">Gọi lại</string>
+    <string name="text_calling">Đang gọi…</string>
+    <string name="text_hang_up">Kết thúc</string>
+</resources>
+
