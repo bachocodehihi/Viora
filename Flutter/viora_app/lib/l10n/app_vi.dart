@@ -1224,6 +1224,8 @@ const Map<String, String> appVi = {
   'notifCommentedYourPost': 'đã bình luận về bài viết của bạn.',
   'notifCommentedYourPostWithContent': 'đã bình luận về bài viết của bạn: "{content}"',
   'notifStartedFollowingYou': 'đã bắt đầu theo dõi bạn.',
+  'notifMentionYou': 'đã nhắc nhở bạn trong tin nhắn: "{content}"',
+  'notifMentionAll': 'đã nhắc nhở mọi người trong tin nhắn: "{content}"',
   'notifDefault': 'Bạn có thông báo mới trên Viora.',
   'friendRequestAccepted': 'Đã chấp nhận lời mời kết bạn.',
   'friendRequestDeclined': 'Đã từ chối lời mời kết bạn.',

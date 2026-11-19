@@ -58,6 +58,12 @@ module.exports = {
     newComment: 'đã bình luận về bài viết của bạn',
     friendRequest: 'đã gửi lời mời kết bạn',
     friendAccepted: 'đã chấp nhận lời mời kết bạn',
+    mentionYou: '{sender} đã nhắc nhở bạn trong tin nhắn: "{content}"',
+    mentionAll: '{sender} đã nhắc nhở mọi người trong tin nhắn: "{content}"',
+    sentPhoto: 'Đã gửi một hình ảnh',
+    sentLocation: 'Đã chia sẻ một vị trí',
+    sentPoll: 'Đã tạo một bình chọn',
+    sentMessage: 'Đã gửi một tin nhắn',
   },
 
 };

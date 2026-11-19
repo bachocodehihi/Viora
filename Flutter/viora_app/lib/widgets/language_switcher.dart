@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../config/app_colors.dart';
 import '../config/theme_helper.dart';
 import '../l10n/language.dart';
+import '../services/notification_service.dart';
 
 class LanguageSwitcher extends StatefulWidget {
   final double width;
@@ -85,6 +86,7 @@ class _LanguageSwitcherState extends State<LanguageSwitcher> with SingleTickerPr
     final newLang = target == 1.0 ? 'en' : 'vi';
     if (LanguageManager.localeNotifier.value.languageCode != newLang) {
       LanguageManager.changeLanguage(newLang);
+      NotificationService.syncTokenWithBackend();
     }
   }
 

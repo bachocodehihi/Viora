@@ -279,7 +279,7 @@ const updateNotificationStatus = async (req, res) => {
 const updateFcmToken = async (req, res) => {
   try {
     const userId = getUserIdFromReq(req);
-    const { fcmToken } = req.body;
+    const { fcmToken, language } = req.body;
 
     if (!userId || !fcmToken) {
       return res.status(400).json({ success: false, code: 'REQUIRED_FIELDS_MISSING', message: 'userId and fcmToken are required' });
@@ -290,10 +290,15 @@ const updateFcmToken = async (req, res) => {
       { $pull: { fcmTokens: fcmToken } }
     );
 
-    await Account.findByIdAndUpdate(userId, {
+    const updateData = {
       fcmToken,
       $addToSet: { fcmTokens: fcmToken }
-    });
+    };
+    if (language && typeof language === 'string') {
+      updateData.language = language.trim().toLowerCase();
+    }
+
+    await Account.findByIdAndUpdate(userId, updateData);
 
     return res.status(200).json({ success: true, message: 'FCM Token updated successfully' });
   } catch (error) {

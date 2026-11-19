@@ -8,6 +8,7 @@ const { verifyToken } = require('../config/jwt.config');
 const { getIO, isUserOnline } = require('../socket');
 const { cloudinary } = require('../config/cloudinary');
 const { sendPushNotification } = require('../services/fcm.service');
+const { t } = require('../locales');
 
 function removeVietnameseDiacritics(str) {
   if (!str) return '';
@@ -76,29 +77,19 @@ const sendChatMessagePushNotifications = async ({
 
     const recipientAccounts = await Account.find({
       _id: { $in: recipientIds }
-    }).select('_id username fcmToken fcmTokens blockedUsers blockedFriends').lean();
+    }).select('_id username language fcmToken fcmTokens blockedUsers blockedFriends').lean();
 
     if (!recipientAccounts || !recipientAccounts.length) return;
 
     const rawContent = (message.content || cleanText || '').trim();
     const isAll = isGroupChat && hasMentionAll(rawContent);
 
-    let messagePreview = cleanText || '';
-    if (!messagePreview) {
-      if (msgType === 'image') messagePreview = 'Đã gửi một hình ảnh';
-      else if (msgType === 'location') messagePreview = 'Đã chia sẻ một vị trí';
-      else if (msgType === 'poll') messagePreview = 'Đã tạo một bình chọn';
-      else messagePreview = 'Đã gửi một tin nhắn';
-    }
-    const truncatedPreview = messagePreview.length > 80
-      ? messagePreview.substring(0, 77) + '...'
-      : messagePreview;
-
     const groupName = conv?.name || 'Nhóm';
 
     await Promise.allSettled(
       recipientAccounts.map(async (recipient) => {
         try {
+          const recLang = recipient.language || 'vi';
           const recIdStr = recipient._id.toString();
 
           const isBlocked = (recipient.blockedUsers || []).some(
@@ -113,6 +104,17 @@ const sendChatMessagePushNotifications = async ({
             return;
           }
 
+          let messagePreview = cleanText || '';
+          if (!messagePreview) {
+            if (msgType === 'image') messagePreview = t(recLang, 'notifications.sentPhoto');
+            else if (msgType === 'location') messagePreview = t(recLang, 'notifications.sentLocation');
+            else if (msgType === 'poll') messagePreview = t(recLang, 'notifications.sentPoll');
+            else messagePreview = t(recLang, 'notifications.sentMessage');
+          }
+          const truncatedPreview = messagePreview.length > 80
+            ? messagePreview.substring(0, 77) + '...'
+            : messagePreview;
+
           let notifTitle = '';
           let notifBody = '';
 
@@ -120,9 +122,15 @@ const sendChatMessagePushNotifications = async ({
             notifTitle = `${senderUsername} (${groupName})`;
             if (isMentioned) {
               if (isAll) {
-                notifBody = `${senderUsername} đã nhắc nhở mọi người trong tin nhắn: "${truncatedPreview}"`;
+                notifBody = t(recLang, 'notifications.mentionAll', {
+                  sender: senderUsername,
+                  content: truncatedPreview
+                });
               } else {
-                notifBody = `${senderUsername} đã nhắc nhở bạn trong tin nhắn: "${truncatedPreview}"`;
+                notifBody = t(recLang, 'notifications.mentionYou', {
+                  sender: senderUsername,
+                  content: truncatedPreview
+                });
               }
             } else {
               notifBody = `${senderUsername}: ${truncatedPreview}`;
@@ -130,7 +138,10 @@ const sendChatMessagePushNotifications = async ({
           } else {
             notifTitle = senderUsername || 'Viora';
             if (isMentioned) {
-              notifBody = `${senderUsername} đã nhắc nhở bạn trong tin nhắn: "${truncatedPreview}"`;
+              notifBody = t(recLang, 'notifications.mentionYou', {
+                sender: senderUsername,
+                content: truncatedPreview
+              });
             } else {
               notifBody = truncatedPreview;
             }
@@ -138,6 +149,8 @@ const sendChatMessagePushNotifications = async ({
 
           const pushData = {
             type: 'message',
+            title: notifTitle,
+            body: notifBody,
             conversationId: targetConvId.toString(),
             senderId: userId.toString(),
             senderName: senderUsername,

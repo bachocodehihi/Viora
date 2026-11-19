@@ -1224,6 +1224,8 @@ const Map<String, String> appEn = {
   'notifCommentedYourPost': 'commented on your post.',
   'notifCommentedYourPostWithContent': 'commented on your post: "{content}"',
   'notifStartedFollowingYou': 'started following you.',
+  'notifMentionYou': 'mentioned you in a message: "{content}"',
+  'notifMentionAll': 'mentioned everyone in a message: "{content}"',
   'notifDefault': 'You have a new notification on Viora.',
   'friendRequestAccepted': 'Accepted friend request.',
   'friendRequestDeclined': 'Declined friend request.',

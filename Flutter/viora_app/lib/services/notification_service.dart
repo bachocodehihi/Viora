@@ -258,6 +258,10 @@ class NotificationService {
         syncTokenWithBackend(fcmToken: newToken);
       });
 
+      LanguageManager.localeNotifier.addListener(() {
+        syncTokenWithBackend();
+      });
+
       await syncTokenWithBackend();
     } catch (e) {
       debugPrint('NotificationService.initialize error: $e');
@@ -415,6 +419,7 @@ class NotificationService {
             body: jsonEncode({
               'userId': userId,
               'fcmToken': token,
+              'language': LanguageManager.localeNotifier.value.languageCode,
             }),
           )
           .timeout(const Duration(seconds: 10));

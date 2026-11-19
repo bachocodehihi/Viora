@@ -78,6 +78,7 @@ const accountSchema = new mongoose.Schema({
   twoFactorEnabled: { type: Boolean, default: false },
   isOnline: { type: Boolean, default: false },
   lastSeen: { type: Date, default: Date.now },
+  language: { type: String, default: 'vi' },
 
   currentDeviceId: { type: String, default: '' },
   currentDeviceName: { type: String, default: '' },
