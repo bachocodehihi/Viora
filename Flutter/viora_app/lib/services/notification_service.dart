@@ -131,7 +131,43 @@ class NotificationService {
           );
           return;
         }
-        if (type == 'message') return;
+        if (type == 'message') {
+          final convId = data['conversationId']?.toString();
+          if (convId != null && SocketService.currentConversationId == convId) {
+            return;
+          }
+          final currentUserId = await SessionService.getUserId();
+          final senderId = data['senderId']?.toString();
+          if (currentUserId != null && senderId != null && currentUserId == senderId) {
+            return;
+          }
+
+          final title = message.notification?.title ??
+              data['title']?.toString() ??
+              data['senderName']?.toString() ??
+              'Viora';
+          final body = message.notification?.body ??
+              data['body']?.toString() ??
+              data['content']?.toString() ??
+              '';
+          final avatar = data['senderAvatar']?.toString() ??
+              data['avatar']?.toString() ??
+              data['imageUrl']?.toString() ??
+              message.notification?.android?.imageUrl;
+
+          if (title.isNotEmpty || body.isNotEmpty) {
+            showInAppNotification(
+              title: title,
+              body: body,
+              avatar: avatar,
+              data: data,
+              onTap: () {
+                _handleNotificationTap(data);
+              },
+            );
+          }
+          return;
+        }
 
         final currentUserId = await SessionService.getUserId();
         final senderId = data['senderId']?.toString();
@@ -335,12 +371,19 @@ class NotificationService {
         );
       }
     } else if (type == 'message' && conversationId != null && conversationId.isNotEmpty) {
+      final isGroup = data['isGroup'] == 'true' || data['isGroup'] == true;
+      final groupName = data['groupName']?.toString();
+      final groupAvatar = data['groupAvatar']?.toString();
+      final senderAvatar = data['senderAvatar']?.toString();
+
       Navigator.of(context).pushNamed(
         AppRoutes.chatDetail,
         arguments: {
           'conversationId': conversationId,
-          'name': senderName ?? 'Chat',
+          'name': (isGroup && groupName != null && groupName.isNotEmpty) ? groupName : (senderName ?? 'Chat'),
+          'avatar': (isGroup && groupAvatar != null && groupAvatar.isNotEmpty) ? groupAvatar : (senderAvatar ?? ''),
           'receiverId': senderId,
+          'isGroup': isGroup,
         },
       );
     }

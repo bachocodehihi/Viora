@@ -1,6 +1,6 @@
 class ApiConfig {
 
-  static const String socketUrl = 'http://192.168.1.7:5000';
+  static const String socketUrl = 'https://viora-0kc4.onrender.com';
   static const String baseUrl = '$socketUrl/api'; 
 
   static const String sendOtp = '$baseUrl/auth/send-otp';

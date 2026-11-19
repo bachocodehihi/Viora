@@ -7,6 +7,165 @@ const Call = require('../models/call.model');
 const { verifyToken } = require('../config/jwt.config');
 const { getIO, isUserOnline } = require('../socket');
 const { cloudinary } = require('../config/cloudinary');
+const { sendPushNotification } = require('../services/fcm.service');
+
+function removeVietnameseDiacritics(str) {
+  if (!str) return '';
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
+}
+
+function hasMentionAll(text) {
+  if (!text || typeof text !== 'string') return false;
+  const regex = /(?:^|[^\w@])@(all|mọi\s+người|moi\s+nguoi|everyone)(?:[^\w]|$)/i;
+  return regex.test(text);
+}
+
+function isMemberMentioned(text, username) {
+  if (!text || !username || typeof text !== 'string') return false;
+  const uClean = username.trim();
+  if (!uClean) return false;
+  const escapeRegex = (s) => s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&').replace(/\s+/g, '\\s+');
+
+  const regex = new RegExp('(?:^|[^\\w@])@' + escapeRegex(uClean) + '(?:[^\\w]|$)', 'i');
+  if (regex.test(text)) return true;
+
+  const textNoDia = removeVietnameseDiacritics(text);
+  const uNoDia = removeVietnameseDiacritics(uClean);
+  if (uNoDia) {
+    const regexNoDia = new RegExp('(?:^|[^\\w@])@' + escapeRegex(uNoDia) + '(?:[^\\w]|$)', 'i');
+    if (regexNoDia.test(textNoDia)) return true;
+  }
+  return false;
+}
+
+const sendChatMessagePushNotifications = async ({
+  conv,
+  isGroupChat,
+  memberIdsSet,
+  userId,
+  senderUsername,
+  senderAvatar,
+  targetConvId,
+  message,
+  msgType,
+  cleanText,
+  primaryImageUrl,
+  isBlockedByReceiver,
+}) => {
+  try {
+    if (isBlockedByReceiver) return;
+
+    const recipientIds = Array.from(memberIdsSet).filter(
+      id => id && id.toString() !== userId.toString()
+    );
+    if (!recipientIds.length) return;
+
+    const mutedUserIds = new Set();
+    if (conv && Array.isArray(conv.members)) {
+      for (const m of conv.members) {
+        const mUid = (m.user?._id || m.user || '').toString();
+        if (mUid && m.isMuted) {
+          mutedUserIds.add(mUid);
+        }
+      }
+    }
+
+    const recipientAccounts = await Account.find({
+      _id: { $in: recipientIds }
+    }).select('_id username fcmToken fcmTokens blockedUsers blockedFriends').lean();
+
+    if (!recipientAccounts || !recipientAccounts.length) return;
+
+    const rawContent = (message.content || cleanText || '').trim();
+    const isAll = isGroupChat && hasMentionAll(rawContent);
+
+    let messagePreview = cleanText || '';
+    if (!messagePreview) {
+      if (msgType === 'image') messagePreview = 'Đã gửi một hình ảnh';
+      else if (msgType === 'location') messagePreview = 'Đã chia sẻ một vị trí';
+      else if (msgType === 'poll') messagePreview = 'Đã tạo một bình chọn';
+      else messagePreview = 'Đã gửi một tin nhắn';
+    }
+    const truncatedPreview = messagePreview.length > 80
+      ? messagePreview.substring(0, 77) + '...'
+      : messagePreview;
+
+    const groupName = conv?.name || 'Nhóm';
+
+    await Promise.allSettled(
+      recipientAccounts.map(async (recipient) => {
+        try {
+          const recIdStr = recipient._id.toString();
+
+          const isBlocked = (recipient.blockedUsers || []).some(
+            b => (b._id || b).toString() === userId.toString()
+          );
+          if (isBlocked) return;
+
+          const isSpecificMention = isMemberMentioned(rawContent, recipient.username);
+          const isMentioned = isAll || isSpecificMention;
+
+          if (mutedUserIds.has(recIdStr) && !isMentioned) {
+            return;
+          }
+
+          let notifTitle = '';
+          let notifBody = '';
+
+          if (isGroupChat) {
+            notifTitle = `${senderUsername} (${groupName})`;
+            if (isMentioned) {
+              if (isAll) {
+                notifBody = `${senderUsername} đã nhắc nhở mọi người trong tin nhắn: "${truncatedPreview}"`;
+              } else {
+                notifBody = `${senderUsername} đã nhắc nhở bạn trong tin nhắn: "${truncatedPreview}"`;
+              }
+            } else {
+              notifBody = `${senderUsername}: ${truncatedPreview}`;
+            }
+          } else {
+            notifTitle = senderUsername || 'Viora';
+            if (isMentioned) {
+              notifBody = `${senderUsername} đã nhắc nhở bạn trong tin nhắn: "${truncatedPreview}"`;
+            } else {
+              notifBody = truncatedPreview;
+            }
+          }
+
+          const pushData = {
+            type: 'message',
+            conversationId: targetConvId.toString(),
+            senderId: userId.toString(),
+            senderName: senderUsername,
+            senderAvatar: senderAvatar || '',
+            messageId: message._id.toString(),
+            isMention: isMentioned ? 'true' : 'false',
+            isAllMention: isAll ? 'true' : 'false',
+            isGroup: isGroupChat ? 'true' : 'false',
+            groupName: isGroupChat ? (conv?.name || '') : '',
+            groupAvatar: isGroupChat ? (conv?.avatar || '') : '',
+          };
+
+          await sendPushNotification({
+            recipientId: recipient._id,
+            title: notifTitle,
+            body: notifBody,
+            data: pushData,
+            imageUrl: (msgType === 'image' && primaryImageUrl) ? primaryImageUrl : null,
+          });
+        } catch (singleErr) {
+          console.error(`[PUSH NOTIF] Failed for recipient ${recipient._id}:`, singleErr.message);
+        }
+      })
+    );
+  } catch (err) {
+    console.error('[PUSH NOTIF] sendChatMessagePushNotifications error:', err);
+  }
+};
 
 const formatTime = (date) => {
   if (!date) return '';
@@ -951,6 +1110,24 @@ const sendMessage = async (req, res) => {
               isGroup: isGroupChat,
             });
           })).catch(() => {});
+
+          // Trigger push notifications for chat message and mentions in background
+          sendChatMessagePushNotifications({
+            conv,
+            isGroupChat,
+            memberIdsSet,
+            userId,
+            senderUsername,
+            senderAvatar: senderObj?.avatar || '',
+            targetConvId,
+            message,
+            msgType,
+            cleanText,
+            primaryImageUrl,
+            isBlockedByReceiver,
+          }).catch((err) => {
+            console.error('[PUSH NOTIF] sendChatMessagePushNotifications error:', err);
+          });
         }
       }
     } catch (_) {}
