@@ -8,7 +8,6 @@ const { verifyToken } = require('../config/jwt.config');
 const { getIO, isUserOnline } = require('../socket');
 const { cloudinary } = require('../config/cloudinary');
 const { sendPushNotification } = require('../services/fcm.service');
-const { t } = require('../locales');
 
 function removeVietnameseDiacritics(str) {
   if (!str) return '';
@@ -77,19 +76,20 @@ const sendChatMessagePushNotifications = async ({
 
     const recipientAccounts = await Account.find({
       _id: { $in: recipientIds }
-    }).select('_id username language fcmToken fcmTokens blockedUsers blockedFriends').lean();
+    }).select('_id username fcmToken fcmTokens blockedUsers blockedFriends').lean();
 
     if (!recipientAccounts || !recipientAccounts.length) return;
 
     const rawContent = (message.content || cleanText || '').trim();
     const isAll = isGroupChat && hasMentionAll(rawContent);
-
-    const groupName = conv?.name || 'Nhóm';
+    const groupName = conv?.name || '';
+    const truncatedPreview = rawContent.length > 80
+      ? rawContent.substring(0, 77) + '...'
+      : rawContent;
 
     await Promise.allSettled(
       recipientAccounts.map(async (recipient) => {
         try {
-          const recLang = recipient.language || 'vi';
           const recIdStr = recipient._id.toString();
 
           const isBlocked = (recipient.blockedUsers || []).some(
@@ -104,69 +104,33 @@ const sendChatMessagePushNotifications = async ({
             return;
           }
 
-          let messagePreview = cleanText || '';
-          if (!messagePreview) {
-            if (msgType === 'image') messagePreview = t(recLang, 'notifications.sentPhoto');
-            else if (msgType === 'location') messagePreview = t(recLang, 'notifications.sentLocation');
-            else if (msgType === 'poll') messagePreview = t(recLang, 'notifications.sentPoll');
-            else messagePreview = t(recLang, 'notifications.sentMessage');
-          }
-          const truncatedPreview = messagePreview.length > 80
-            ? messagePreview.substring(0, 77) + '...'
-            : messagePreview;
-
-          let notifTitle = '';
-          let notifBody = '';
-
-          if (isGroupChat) {
-            notifTitle = `${senderUsername} (${groupName})`;
-            if (isMentioned) {
-              if (isAll) {
-                notifBody = t(recLang, 'notifications.mentionAll', {
-                  sender: senderUsername,
-                  content: truncatedPreview
-                });
-              } else {
-                notifBody = t(recLang, 'notifications.mentionYou', {
-                  sender: senderUsername,
-                  content: truncatedPreview
-                });
-              }
-            } else {
-              notifBody = `${senderUsername}: ${truncatedPreview}`;
-            }
-          } else {
-            notifTitle = senderUsername || 'Viora';
-            if (isMentioned) {
-              notifBody = t(recLang, 'notifications.mentionYou', {
-                sender: senderUsername,
-                content: truncatedPreview
-              });
-            } else {
-              notifBody = truncatedPreview;
-            }
-          }
-
+          // Backend only returns raw structured data - the client app handles all formatting & i18n
           const pushData = {
             type: 'message',
-            title: notifTitle,
-            body: notifBody,
-            conversationId: targetConvId.toString(),
             senderId: userId.toString(),
-            senderName: senderUsername,
+            senderName: senderUsername || '',
             senderAvatar: senderAvatar || '',
+            conversationId: targetConvId.toString(),
             messageId: message._id.toString(),
+            content: truncatedPreview,
+            msgType: msgType || 'text',
             isMention: isMentioned ? 'true' : 'false',
+            mentionType: isAll ? 'all' : (isSpecificMention ? 'you' : 'none'),
             isAllMention: isAll ? 'true' : 'false',
             isGroup: isGroupChat ? 'true' : 'false',
-            groupName: isGroupChat ? (conv?.name || '') : '',
+            groupName: isGroupChat ? groupName : '',
             groupAvatar: isGroupChat ? (conv?.avatar || '') : '',
           };
 
+          const fallbackTitle = isGroupChat && groupName
+            ? `${senderUsername} (${groupName})`
+            : (senderUsername || 'Viora');
+          const fallbackBody = truncatedPreview;
+
           await sendPushNotification({
             recipientId: recipient._id,
-            title: notifTitle,
-            body: notifBody,
+            title: fallbackTitle,
+            body: fallbackBody,
             data: pushData,
             imageUrl: (msgType === 'image' && primaryImageUrl) ? primaryImageUrl : null,
           });

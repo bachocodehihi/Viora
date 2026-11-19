@@ -28,6 +28,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       type == 'call_ended' ||
       type == 'call_missed') {
     await CallService.dismissCallFromFcm(data);
+  } else if (type == 'message') {
+    if (message.notification == null) {
+      await NotificationService.showBackgroundMessageNotification(data);
+    }
   }
 }
 
@@ -57,6 +61,98 @@ class NotificationService {
 
   static void _markKeyRecent(String key) {
     _recentNotificationKeys[key] = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  static String formatMessageTitle(Map<String, dynamic> data) {
+    final senderName = data['senderName']?.toString() ?? 'Viora';
+    final isGroup = data['isGroup'] == 'true' || data['isGroup'] == true;
+    final groupName = data['groupName']?.toString() ?? '';
+    if (isGroup && groupName.isNotEmpty) {
+      return '$senderName ($groupName)';
+    }
+    return senderName.isNotEmpty ? senderName : 'Viora';
+  }
+
+  static String formatMessageBody(Map<String, dynamic> data, [Language? l10n]) {
+    final isMention = data['isMention'] == 'true' || data['isMention'] == true;
+    final mentionType = data['mentionType']?.toString() ?? '';
+    final isAllMention = mentionType == 'all' || data['isAllMention'] == 'true';
+    final senderName = data['senderName']?.toString() ?? '';
+    final rawContent = (data['content'] ?? data['body'] ?? '').toString().trim();
+    final msgType = data['msgType']?.toString() ?? 'text';
+    final isGroup = data['isGroup'] == 'true' || data['isGroup'] == true;
+
+    String preview = rawContent;
+    if (preview.isEmpty || msgType != 'text') {
+      if (msgType == 'image') {
+        preview = l10n?.notifSentPhoto ?? Language.translateStatic('notifSentPhoto');
+      } else if (msgType == 'location') {
+        preview = l10n?.notifSentLocation ?? Language.translateStatic('notifSentLocation');
+      } else if (msgType == 'poll') {
+        preview = l10n?.notifSentPoll ?? Language.translateStatic('notifSentPoll');
+      } else if (preview.isEmpty) {
+        preview = l10n?.notifSentMessage ?? Language.translateStatic('notifSentMessage');
+      }
+    }
+
+    if (isMention) {
+      if (isAllMention) {
+        if (l10n != null) {
+          return l10n.notifMentionAll(senderName, preview);
+        }
+        final tpl = Language.translateStatic('notifMentionAll');
+        return tpl.replaceAll('{sender}', senderName).replaceAll('{content}', preview);
+      } else {
+        if (l10n != null) {
+          return l10n.notifMentionYou(senderName, preview);
+        }
+        final tpl = Language.translateStatic('notifMentionYou');
+        return tpl.replaceAll('{sender}', senderName).replaceAll('{content}', preview);
+      }
+    }
+
+    if (isGroup && senderName.isNotEmpty) {
+      return '$senderName: $preview';
+    }
+
+    return preview;
+  }
+
+  static Future<void> showBackgroundMessageNotification(Map<String, dynamic> data) async {
+    try {
+      await LanguageManager.init();
+      final title = formatMessageTitle(data);
+      final body = formatMessageBody(data);
+      final convId = data['conversationId']?.toString();
+      final msgId = data['messageId']?.toString();
+      final notifId = (convId ?? msgId ?? DateTime.now().millisecondsSinceEpoch.toString()).hashCode;
+
+      const androidDetails = AndroidNotificationDetails(
+        'viora_notification_channel',
+        'Viora Notifications',
+        channelDescription: 'Viora notifications and messages channel',
+        importance: Importance.max,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+      );
+      const iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+      const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+
+      await _localNotifications.show(
+        notifId,
+        title,
+        body,
+        details,
+        payload: jsonEncode(data),
+      );
+    } catch (e) {
+      debugPrint('showBackgroundMessageNotification error: $e');
+    }
   }
 
   static Future<void> initialize() async {
@@ -142,14 +238,10 @@ class NotificationService {
             return;
           }
 
-          final title = message.notification?.title ??
-              data['title']?.toString() ??
-              data['senderName']?.toString() ??
-              'Viora';
-          final body = message.notification?.body ??
-              data['body']?.toString() ??
-              data['content']?.toString() ??
-              '';
+          final context = navigatorKey.currentContext;
+          final l10n = context != null ? Language.of(context) : null;
+          final title = formatMessageTitle(data);
+          final body = formatMessageBody(data, l10n);
           final avatar = data['senderAvatar']?.toString() ??
               data['avatar']?.toString() ??
               data['imageUrl']?.toString() ??

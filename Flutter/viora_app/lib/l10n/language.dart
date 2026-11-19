@@ -1253,6 +1253,14 @@ class Language {
   String get voiceCallOngoing => translate('voiceCallOngoing');
   String get videoCallOngoing => translate('videoCallOngoing');
   String get callAlreadyEnded => translate('callAlreadyEnded');
+  String notifMentionYou(String sender, String content) =>
+      translate('notifMentionYou').replaceAll('{sender}', sender).replaceAll('{content}', content);
+  String notifMentionAll(String sender, String content) =>
+      translate('notifMentionAll').replaceAll('{sender}', sender).replaceAll('{content}', content);
+  String get notifSentPhoto => translate('notifSentPhoto');
+  String get notifSentLocation => translate('notifSentLocation');
+  String get notifSentPoll => translate('notifSentPoll');
+  String get notifSentMessage => translate('notifSentMessage');
 
   String translate(String key) {
     String locale = 'en';
