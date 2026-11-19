@@ -52,19 +52,4 @@ module.exports = {
     unauthorized: 'Unauthorized',
     forbidden: 'Forbidden',
   },
-
-  notifications: {
-    newFollower: 'followed you',
-    newLike: 'liked your post',
-    newComment: 'commented on your post',
-    friendRequest: 'sent you a friend request',
-    friendAccepted: 'accepted your friend request',
-    mentionYou: '{sender} mentioned you in a message: "{content}"',
-    mentionAll: '{sender} mentioned everyone in a message: "{content}"',
-    sentPhoto: 'Sent a photo',
-    sentLocation: 'Shared a location',
-    sentPoll: 'Created a poll',
-    sentMessage: 'Sent a message',
-  },
-
 };
