@@ -7,6 +7,7 @@ Thumbs.db
 # Gradle & Android build caches
 **/.gradle/
 **/android/build/
+**/.kotlin/
 
 # Environment & Secret files
 .env
