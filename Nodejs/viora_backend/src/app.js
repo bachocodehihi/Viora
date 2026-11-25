@@ -36,6 +36,7 @@ const notificationRoute = require('./routes/notification.route');
 const callRoute = require('./routes/call.route');
 const locationRoute = require('./routes/location.route');
 const livestreamRoute = require('./routes/livestream.route');
+const storyRoute = require('./routes/story.route');
 
 app.use('/api/auth', authRoute);
 app.use('/api/account', accountRoute);
@@ -47,6 +48,7 @@ app.use('/api/notification', notificationRoute);
 app.use('/api/call', callRoute);
 app.use('/api/location', locationRoute);
 app.use('/api/live', livestreamRoute);
+app.use('/api/story', storyRoute);
 
 app.get('/logo.png', (req, res) => {
   res.sendFile(path.join(__dirname, 'logo.png'));

@@ -133,6 +133,24 @@ class ProfileService {
             avatar: account['avatar']?.toString(),
             qrCode: account['qrCode']?.toString(),
           );
+          final priv = account['privacy'];
+          bool? showActive;
+          String? whoCanMsg;
+          if (priv is Map) {
+            whoCanMsg = priv['whoCanMessage']?.toString();
+            if (priv.containsKey('showActiveStatus')) {
+              showActive = priv['showActiveStatus'] != false;
+            }
+          }
+          if (account.containsKey('showActiveStatus')) {
+            showActive = account['showActiveStatus'] != false;
+          }
+          await SessionService.savePrivacySettings(
+            isPrivate: account['isPrivate'] == true,
+            twoFactor: account['twoFactorEnabled'] == true,
+            showActiveStatus: showActive,
+            whoCanMessage: whoCanMsg,
+          );
           return account;
         }
       }

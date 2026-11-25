@@ -19,38 +19,80 @@ class PrivacySecurityScreen extends StatefulWidget {
 }
 
 class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
-  bool _activeStatus = true;
+  bool _activeStatus = SessionService.cachedShowActiveStatus ?? true;
   bool _isUpdatingActiveStatus = false;
-  bool _twoFactorAuth = false;
+  bool _twoFactorAuth = SessionService.cachedTwoFactor ?? false;
   bool _isUpdatingTwoFactor = false;
-  bool _isPrivate = false;
+  bool _isPrivate = SessionService.cachedIsPrivate ?? false;
   bool _isUpdatingPrivate = false;
-  String _whoCanMessage = 'everyone';
+  String _whoCanMessage = SessionService.cachedWhoCanMessage ?? 'everyone';
 
   @override
   void initState() {
     super.initState();
-    _loadPrivacySettings();
+    _initFromCacheAndLoad();
+  }
+
+  Future<void> _initFromCacheAndLoad() async {
+    if (SessionService.cachedIsPrivate == null) {
+      await SessionService.initPrivacyCache();
+      if (mounted) {
+        final cachedPriv = SessionService.cachedIsPrivate;
+        final cachedAct = SessionService.cachedShowActiveStatus;
+        final cachedTwo = SessionService.cachedTwoFactor;
+        final cachedWho = SessionService.cachedWhoCanMessage;
+
+        if (cachedPriv != null || cachedAct != null || cachedTwo != null || cachedWho != null) {
+          setState(() {
+            if (cachedPriv != null) _isPrivate = cachedPriv;
+            if (cachedAct != null) _activeStatus = cachedAct;
+            if (cachedTwo != null) _twoFactorAuth = cachedTwo;
+            if (cachedWho != null) _whoCanMessage = cachedWho;
+          });
+        }
+      }
+    }
+    await _loadPrivacySettings();
   }
 
   Future<void> _loadPrivacySettings() async {
     try {
       final profile = await ProfileService.getProfile();
       if (profile != null && mounted) {
-        setState(() {
-          _isPrivate = profile['isPrivate'] == true;
-          _twoFactorAuth = profile['twoFactorEnabled'] == true;
-          final priv = profile['privacy'];
-          if (priv is Map) {
-            _whoCanMessage = priv['whoCanMessage']?.toString() ?? 'everyone';
-            if (priv.containsKey('showActiveStatus')) {
-              _activeStatus = priv['showActiveStatus'] != false;
-            }
+        final newIsPrivate = profile['isPrivate'] == true;
+        final newTwoFactor = profile['twoFactorEnabled'] == true;
+        String newWhoCanMsg = _whoCanMessage;
+        bool newActiveStatus = _activeStatus;
+
+        final priv = profile['privacy'];
+        if (priv is Map) {
+          newWhoCanMsg = priv['whoCanMessage']?.toString() ?? 'everyone';
+          if (priv.containsKey('showActiveStatus')) {
+            newActiveStatus = priv['showActiveStatus'] != false;
           }
-          if (profile.containsKey('showActiveStatus')) {
-            _activeStatus = profile['showActiveStatus'] != false;
-          }
-        });
+        }
+        if (profile.containsKey('showActiveStatus')) {
+          newActiveStatus = profile['showActiveStatus'] != false;
+        }
+
+        await SessionService.savePrivacySettings(
+          isPrivate: newIsPrivate,
+          twoFactor: newTwoFactor,
+          showActiveStatus: newActiveStatus,
+          whoCanMessage: newWhoCanMsg,
+        );
+
+        if (_isPrivate != newIsPrivate ||
+            _twoFactorAuth != newTwoFactor ||
+            _activeStatus != newActiveStatus ||
+            _whoCanMessage != newWhoCanMsg) {
+          setState(() {
+            _isPrivate = newIsPrivate;
+            _twoFactorAuth = newTwoFactor;
+            _activeStatus = newActiveStatus;
+            _whoCanMessage = newWhoCanMsg;
+          });
+        }
       }
     } catch (e) {
       debugPrint('Error loading privacy settings: $e');
@@ -76,6 +118,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     });
 
     if (res != null) {
+      SessionService.savePrivacySettings(showActiveStatus: res);
       AppToast.show(
         context,
         res ? l10n.activeStatusEnabledToast : l10n.activeStatusDisabledToast,
@@ -108,6 +151,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     });
 
     if (res != null) {
+      SessionService.savePrivacySettings(twoFactor: res);
       AppToast.show(
         context,
         res ? l10n.twoFactorEnabledToast : l10n.twoFactorDisabledToast,
@@ -177,6 +221,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                   }
                 });
                 if (res != null) {
+                  SessionService.savePrivacySettings(isPrivate: res);
                   AppToast.show(
                     context,
                     res
@@ -284,9 +329,11 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
         if (_whoCanMessage == value) return;
 
         setState(() => _whoCanMessage = value);
+        SessionService.savePrivacySettings(whoCanMessage: value);
         final success = await ProfileService.updateWhoCanMessage(value);
         if (!success && mounted) {
           setState(() => _whoCanMessage = value == 'everyone' ? 'friends' : 'everyone');
+          SessionService.savePrivacySettings(whoCanMessage: _whoCanMessage);
           AppToast.error(context, context.l10n.failedUpdatePrivacy);
         }
       },
@@ -524,7 +571,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
 
               const SizedBox(height: 28),
 
-              _buildSectionHeader(context, l10n.sectionAccountManagement, isDanger: true),
+              _buildSectionHeader(context, l10n.sectionAccountManagement),
               const SizedBox(height: 10),
               Container(
                 width: double.infinity,
@@ -574,7 +621,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     return Padding(
       padding: const EdgeInsets.only(left: 4),
       child: Text(
-        title,
+        title.toUpperCase(),
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w800,

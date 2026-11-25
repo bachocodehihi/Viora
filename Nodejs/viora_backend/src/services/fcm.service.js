@@ -95,8 +95,12 @@ const sendPushNotification = async ({
         payload: {
           aps: {
             sound: 'default',
-            badge: 1
+            badge: 1,
+            'mutable-content': 1,
           }
+        },
+        fcm_options: {
+          ...(imageUrl ? { image: imageUrl } : {})
         }
       }
     };

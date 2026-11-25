@@ -129,7 +129,6 @@ async function runSeed() {
     }
   }
 
-  // Count totals currently in database for verification
   const totalContinents = await Continent.countDocuments();
   const totalNations = await Nation.countDocuments();
   const totalCities = await City.countDocuments();

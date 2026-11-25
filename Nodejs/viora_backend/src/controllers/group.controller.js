@@ -73,7 +73,7 @@ const createGroup = async (req, res) => {
       membersCount: members.length,
       privacy: groupPrivacy,
       inviteCode,
-      inviteLink: `viora://group/join?code=${inviteCode}`,
+      inviteLink: `viora: group/join?code=${inviteCode}`,
       settings: {
         privacy: groupPrivacy,
         joinPolicy,
@@ -407,6 +407,10 @@ const getGroupDetail = async (req, res) => {
               joinedAt: m.joinedAt || new Date(),
             };
           });
+          const isConvMember = userId && conv.members?.some((m) => {
+            const mId = m.user?._id?.toString() || m.user?.toString();
+            return mId === userId.toString();
+          });
           return res.status(200).json({
             success: true,
             group: {
@@ -416,7 +420,8 @@ const getGroupDetail = async (req, res) => {
               membersCount: formattedMembers.length,
               members: formattedMembers,
               privacy: 'private',
-              role: 'member',
+              role: isConvMember ? 'member' : null,
+              isMember: !!isConvMember,
               qrCode: JSON.stringify({
                 type: 'group',
                 groupId: conv._id.toString(),

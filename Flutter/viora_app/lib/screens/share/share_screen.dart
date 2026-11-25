@@ -10,11 +10,15 @@ import '../../widgets/app_avatar.dart';
 class ShareScreen extends StatefulWidget {
   final String postAuthor;
   final String postContent;
+  final String postId;
+  final Map<String, dynamic>? post;
 
   const ShareScreen({
     super.key,
     required this.postAuthor,
     required this.postContent,
+    this.postId = '',
+    this.post,
   });
 
   @override
@@ -208,12 +212,14 @@ class _ShareScreenState extends State<ShareScreen> {
         await MessageService.sendMessage(
           content: content,
           conversationId: target['conversationId'] ?? target['id'],
+          postId: widget.postId,
         );
       } else {
         await MessageService.sendMessage(
           content: content,
           receiverId: target['id'],
           conversationId: target['conversationId'],
+          postId: widget.postId,
         );
       }
     } catch (e) {

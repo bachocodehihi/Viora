@@ -15,6 +15,11 @@ const {
   stopShareLocation,
   updateLiveLocation,
   votePoll,
+  muteConversation,
+  unmuteConversation,
+  getMuteStatus,
+  deleteConversation,
+  updateQuickEmoji,
 } = require('../controllers/message.controller');
 
 router.get('/conversations', getConversations);
@@ -31,5 +36,10 @@ router.post('/edit-message', editMessage);
 router.post('/stop-share-location', stopShareLocation);
 router.post('/update-live-location', updateLiveLocation);
 router.post('/vote-poll', votePoll);
+router.post('/mute-conversation', muteConversation);
+router.post('/unmute-conversation', unmuteConversation);
+router.post('/mute-status', getMuteStatus);
+router.post('/delete-conversation', deleteConversation);
+router.post('/quick-emoji', updateQuickEmoji);
 
 module.exports = router;

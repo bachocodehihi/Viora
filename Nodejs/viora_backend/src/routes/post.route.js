@@ -20,7 +20,9 @@ const {
   updateCommentSettings,
   blockCommenter,
   unblockCommenter,
-  deleteComment
+  deleteComment,
+  getPostById,
+  findPost
 } = require('../controllers/post.controller');
 
 
@@ -52,5 +54,11 @@ router.post('/comment-settings', updateCommentSettings);
 router.post('/block-commenter', blockCommenter);
 router.post('/unblock-commenter', unblockCommenter);
 router.post('/delete-comment', deleteComment);
+
+router.get('/detail/:postId', getPostById);
+router.get('/detail', getPostById);
+router.post('/detail', getPostById);
+router.get('/find', findPost);
+router.post('/find', findPost);
 
 module.exports = router;

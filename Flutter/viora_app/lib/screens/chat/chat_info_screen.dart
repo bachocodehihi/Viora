@@ -12,6 +12,8 @@ import '../../services/group_service.dart';
 import '../../widgets/toast/app_toast.dart';
 import 'chat_media_screen.dart';
 import 'group_members_screen.dart';
+import 'package:flutter/services.dart';
+import '../../services/message_service.dart';
 import 'group_qr_screen.dart';
 
 class ChatInfoScreen extends StatefulWidget {
@@ -25,6 +27,8 @@ class ChatInfoScreen extends StatefulWidget {
   final List<Map<String, dynamic>> pinnedMessages;
   final bool? isGroup;
   final bool? isOnline;
+  final bool? isMuted;
+  final String? quickEmoji;
 
   const ChatInfoScreen({
     super.key,
@@ -38,7 +42,71 @@ class ChatInfoScreen extends StatefulWidget {
     this.pinnedMessages = const [],
     this.isGroup,
     this.isOnline,
+    this.isMuted,
+    this.quickEmoji,
   });
+
+  static String? getReactionAsset(String? text) {
+    if (text == null || text.isEmpty) return null;
+    final clean = text.trim().toLowerCase();
+    switch (clean) {
+      case 'like':
+      case '👍':
+        return 'assets/icons/like.png';
+      case 'love':
+      case 'heart':
+      case '❤️':
+      case '❤':
+        return 'assets/icons/heart.png';
+      case 'care':
+      case '🥰':
+        return 'assets/icons/care.png';
+      case 'haha':
+      case '😂':
+      case '😆':
+        return 'assets/icons/haha.png';
+      case 'wow':
+      case '😮':
+      case '😲':
+        return 'assets/icons/wow.png';
+      case 'sad':
+      case 'cry':
+      case '😢':
+      case '😭':
+        return 'assets/icons/cry.png';
+      case 'angry':
+      case '😡':
+      case '👿':
+        return 'assets/icons/angry.png';
+      default:
+        return null;
+    }
+  }
+
+  static String getEmojiSymbol(String? text) {
+    if (text == null || text.isEmpty) return '👍';
+    final clean = text.trim().toLowerCase();
+    switch (clean) {
+      case 'like':
+        return '👍';
+      case 'love':
+      case 'heart':
+        return '❤️';
+      case 'care':
+        return '🥰';
+      case 'haha':
+        return '😆';
+      case 'wow':
+        return '😮';
+      case 'sad':
+      case 'cry':
+        return '😢';
+      case 'angry':
+        return '😡';
+      default:
+        return text;
+    }
+  }
 
   @override
   State<ChatInfoScreen> createState() => _ChatInfoScreenState();
@@ -48,17 +116,72 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
   Language get l10n => context.l10n;
   bool _readReceiptsEnabled = true;
   String _quickEmoji = '👍';
+  List<String> _customEmojis = [];
   String? _nickname;
   int? _groupMembersCount;
   String? _groupQrCode;
+  String? _actualGroupId;
   List<Map<String, dynamic>> _groupMembers = [];
+  bool _isMuted = false;
+  DateTime? _mutedUntil;
 
   @override
   void initState() {
     super.initState();
+    _isMuted = widget.isMuted ?? false;
+    if (widget.quickEmoji != null && widget.quickEmoji!.isNotEmpty) {
+      _quickEmoji = widget.quickEmoji!;
+    }
+    _checkMuteStatus();
+    _loadQuickEmoji();
     if (widget.isGroup == true) {
       _loadGroupData();
     }
+  }
+
+  Future<void> _loadQuickEmoji() async {
+    final convId = widget.conversationId;
+    final recId = widget.receiverId;
+    if ((convId == null || convId.isEmpty) && (recId == null || recId.isEmpty)) return;
+    try {
+      final res = await MessageService.loadMessages(
+        conversationId: convId,
+        receiverId: recId,
+        limit: 1,
+      );
+      if (res != null && mounted) {
+        setState(() {
+          if (res['quickEmoji'] != null && res['quickEmoji'].toString().isNotEmpty) {
+            _quickEmoji = res['quickEmoji'].toString();
+          }
+          if (res['customEmojis'] is List) {
+            _customEmojis = List<String>.from(res['customEmojis'].map((e) => e.toString()));
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _checkMuteStatus() async {
+    final convId = widget.conversationId;
+    final recId = widget.receiverId;
+    if ((convId == null || convId.isEmpty) && (recId == null || recId.isEmpty)) return;
+    try {
+      final res = await MessageService.getMuteStatus(
+        conversationId: convId,
+        receiverId: recId,
+      );
+      if (res != null && mounted) {
+        setState(() {
+          _isMuted = res['isMuted'] == true;
+          if (res['mutedUntil'] != null) {
+            _mutedUntil = DateTime.tryParse(res['mutedUntil'].toString());
+          } else {
+            _mutedUntil = null;
+          }
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadGroupData() async {
@@ -68,6 +191,7 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
       final data = await GroupService.getGroupDetail(targetId);
       if (data != null && mounted) {
         setState(() {
+          _actualGroupId = data['id']?.toString() ?? data['groupId']?.toString();
           _groupQrCode = data['qrCode']?.toString();
           if (data['members'] is List) {
             _groupMembers = List<Map<String, dynamic>>.from(data['members']);
@@ -85,16 +209,22 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
     final l10n = context.l10n;
     final displayName = _nickname ?? widget.name;
 
-    return Scaffold(
-      backgroundColor: context.scaffoldBg,
-      appBar: AppBar(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        Navigator.pop(context, _quickEmoji);
+      },
+      child: Scaffold(
         backgroundColor: context.scaffoldBg,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-          onPressed: () => Navigator.pop(context),
+        appBar: AppBar(
+          backgroundColor: context.scaffoldBg,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+            onPressed: () => Navigator.pop(context, _quickEmoji),
+          ),
         ),
-      ),
       body: SingleChildScrollView(
         physics: const BouncingScrollPhysics(),
         padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
@@ -171,9 +301,10 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
                 ),
                 Expanded(
                   child: _buildQuickActionButton(
-                    icon: Icons.notifications_rounded,
-                    label: l10n.notifications,
-                    onTap: () {},
+                    icon: _isMuted ? Icons.notifications_off_rounded : Icons.notifications_rounded,
+                    label: _isMuted ? l10n.mutedStatus : l10n.notifications,
+                    customIconColor: _isMuted ? Colors.orangeAccent : null,
+                    onTap: _handleNotificationTap,
                   ),
                 ),
                 Expanded(
@@ -202,7 +333,7 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
                 icon: Icons.thumb_up_rounded,
                 iconColor: AppColors.blue,
                 title: l10n.quickEmoji,
-                trailingText: _quickEmoji,
+                trailingWidget: _buildEmojiItem(_quickEmoji, size: 22.r),
                 onTap: () {
                   _showEmojiPicker();
                 },
@@ -254,6 +385,7 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
                           groupName: widget.name,
                           groupAvatar: widget.avatar,
                           groupColor: widget.color,
+                          groupId: _actualGroupId ?? widget.conversationId,
                           conversationId: widget.conversationId,
                           qrCode: _groupQrCode,
                         ),
@@ -327,6 +459,13 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
 
             _buildSectionHeader(l10n.privacyAndSupport),
             _buildCardGroup([
+              _buildSettingTile(
+                icon: _isMuted ? Icons.notifications_off_rounded : Icons.notifications_rounded,
+                iconColor: _isMuted ? Colors.orangeAccent : AppColors.blue,
+                title: l10n.notifications,
+                trailingText: _isMuted ? l10n.mutedStatus : l10n.enabledState,
+                onTap: _handleNotificationTap,
+              ),
               _buildSettingTile(
                 icon: Icons.done_all_rounded,
                 iconColor: AppColors.blue,
@@ -415,9 +554,18 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
                     content: l10n.clearChatHistoryDesc,
                     confirmText: l10n.delete,
                     isDestructive: true,
-                    onConfirm: () {
+                    onConfirm: () async {
                       Navigator.pop(context);
-                      AppToast.info(context, l10n.chatHistoryClearedToast);
+                      final convId = widget.conversationId;
+                      final recId = widget.receiverId;
+                      await MessageService.deleteConversation(
+                        conversationId: convId,
+                        receiverId: recId,
+                      );
+                      if (mounted) {
+                        AppToast.success(context, l10n.chatHistoryClearedToast);
+                        Navigator.pop(context, true);
+                      }
                     },
                   );
                 },
@@ -427,6 +575,7 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 
@@ -435,12 +584,13 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
     required String label,
     required VoidCallback onTap,
     bool isActive = false,
+    Color? customIconColor,
   }) {
     final bgColor = context.isDark
         ? (isActive ? AppColors.blue.withValues(alpha: 0.25) : const Color(0xFF232234))
         : (isActive ? AppColors.blue.withValues(alpha: 0.15) : const Color(0xFFE4E6EB));
 
-    final iconColor = isActive ? AppColors.blue : context.textPrimary;
+    final iconColor = customIconColor ?? (isActive ? AppColors.blue : context.textPrimary);
 
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 2.w),
@@ -608,6 +758,304 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
     );
   }
 
+  void _handleNotificationTap() {
+    if (_isMuted) {
+      _showUnmuteConfirmDialog();
+    } else {
+      _showMuteOptionsDialog();
+    }
+  }
+
+  void _showMuteOptionsDialog() {
+    int selectedDuration = 15;
+
+    showDialog(
+      context: context,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final options = [
+            {'title': l10n.in15Minutes, 'duration': 15},
+            {'title': l10n.in1Hour, 'duration': 60},
+            {'title': l10n.in8Hours, 'duration': 480},
+            {'title': l10n.in24Hours, 'duration': 1440},
+            {'title': l10n.untilITurnBackOn, 'duration': -1},
+          ];
+
+          return AlertDialog(
+            backgroundColor: context.cardBg,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20.r)),
+            titlePadding: EdgeInsets.fromLTRB(20.w, 20.h, 20.w, 8.h),
+            contentPadding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+            actionsPadding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 14.h),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8.r),
+                      decoration: BoxDecoration(
+                        color: Colors.orangeAccent.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.notifications_off_rounded, color: Colors.orangeAccent, size: 20.r),
+                    ),
+                    SizedBox(width: 10.w),
+                    Expanded(
+                      child: Text(
+                        l10n.muteNotifications,
+                        style: TextStyle(
+                          fontSize: 17.sp,
+                          fontWeight: FontWeight.bold,
+                          color: context.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 10.h),
+                Text(
+                  l10n.muteChatFor,
+                  style: TextStyle(
+                    fontSize: 13.sp,
+                    color: context.textMuted,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: options.map((opt) {
+                final duration = opt['duration'] as int;
+                final isSelected = selectedDuration == duration;
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12.r),
+                    onTap: () {
+                      setDialogState(() {
+                        selectedDuration = duration;
+                      });
+                    },
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isSelected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+                            color: isSelected ? AppColors.blue : context.textMuted,
+                            size: 20.r,
+                          ),
+                          SizedBox(width: 12.w),
+                          Expanded(
+                            child: Text(
+                              opt['title'] as String,
+                              style: TextStyle(
+                                fontSize: 14.5.sp,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                                color: isSelected ? context.textPrimary : context.textPrimary.withValues(alpha: 0.8),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dlgCtx),
+                child: Text(
+                  l10n.cancel,
+                  style: TextStyle(
+                    fontSize: 14.5.sp,
+                    fontWeight: FontWeight.w600,
+                    color: context.textMuted,
+                  ),
+                ),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.blue,
+                  elevation: 0,
+                  padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 10.h),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                ),
+                onPressed: () async {
+                  Navigator.pop(dlgCtx);
+                  await _applyMute(selectedDuration);
+                },
+                child: Text(
+                  l10n.muteBtn,
+                  style: TextStyle(
+                    fontSize: 14.sp,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showUnmuteConfirmDialog() {
+    showDialog(
+      context: context,
+      builder: (dlgCtx) => AlertDialog(
+        backgroundColor: context.cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20.r)),
+        title: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8.r),
+              decoration: BoxDecoration(
+                color: AppColors.blue.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.notifications_active_rounded, color: AppColors.blue, size: 20.r),
+            ),
+            SizedBox(width: 10.w),
+            Expanded(
+              child: Text(
+                l10n.unmuteConfirmTitle,
+                style: TextStyle(
+                  fontSize: 17.sp,
+                  fontWeight: FontWeight.bold,
+                  color: context.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          '${l10n.unmuteConfirmDesc} ${widget.name}.',
+          style: TextStyle(fontSize: 13.5.sp, color: context.textMuted, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dlgCtx),
+            child: Text(
+              l10n.cancel,
+              style: TextStyle(
+                fontSize: 14.5.sp,
+                fontWeight: FontWeight.w600,
+                color: context.textMuted,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.blue,
+              elevation: 0,
+              padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 10.h),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+            ),
+            onPressed: () async {
+              Navigator.pop(dlgCtx);
+              await _applyUnmute();
+            },
+            child: Text(
+              l10n.unmuteConfirmBtn,
+              style: TextStyle(
+                fontSize: 14.sp,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _applyMute(int duration) async {
+    final convId = widget.conversationId;
+    final recId = widget.receiverId;
+    if ((convId == null || convId.isEmpty) && (recId == null || recId.isEmpty)) return;
+
+    setState(() {
+      _isMuted = true;
+    });
+
+    try {
+      final res = await MessageService.muteConversation(
+        conversationId: convId,
+        receiverId: recId,
+        durationMinutes: duration,
+      );
+      if (!mounted) return;
+      if (res != null && res['success'] == true) {
+        HapticFeedback.mediumImpact();
+        AppToast.success(context, l10n.mutedToast);
+        setState(() {
+          _isMuted = true;
+          if (res['mutedUntil'] != null) {
+            _mutedUntil = DateTime.tryParse(res['mutedUntil'].toString());
+          } else {
+            _mutedUntil = null;
+          }
+        });
+      } else {
+        setState(() {
+          _isMuted = false;
+        });
+        AppToast.error(context, l10n.requestConnectionError);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isMuted = false;
+        });
+        AppToast.error(context, l10n.requestConnectionError);
+      }
+    }
+  }
+
+  Future<void> _applyUnmute() async {
+    final convId = widget.conversationId;
+    final recId = widget.receiverId;
+    if ((convId == null || convId.isEmpty) && (recId == null || recId.isEmpty)) return;
+
+    setState(() {
+      _isMuted = false;
+    });
+
+    try {
+      final res = await MessageService.unmuteConversation(
+        conversationId: convId,
+        receiverId: recId,
+      );
+      if (!mounted) return;
+      if (res != null && res['success'] == true) {
+        HapticFeedback.mediumImpact();
+        AppToast.success(context, l10n.unmutedToast);
+        setState(() {
+          _isMuted = false;
+          _mutedUntil = null;
+        });
+      } else {
+        setState(() {
+          _isMuted = true;
+        });
+        AppToast.error(context, l10n.requestConnectionError);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isMuted = true;
+        });
+        AppToast.error(context, l10n.requestConnectionError);
+      }
+    }
+  }
+
   void _showNicknameDialog() {
     final controller = TextEditingController(text: _nickname ?? '');
     showDialog(
@@ -649,45 +1097,386 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
     );
   }
 
+  Widget _buildEmojiItem(String item, {double size = 26}) {
+    final asset = ChatInfoScreen.getReactionAsset(item);
+    if (asset != null) {
+      return Image.asset(asset, width: size, height: size, fit: BoxFit.contain);
+    }
+    return Text(item, style: TextStyle(fontSize: size));
+  }
+
+  Future<void> _setQuickEmoji(String emoji) async {
+    setState(() {
+      _quickEmoji = emoji;
+      if (!_customEmojis.contains(emoji)) {
+        _customEmojis.add(emoji);
+      }
+    });
+    HapticFeedback.lightImpact();
+    AppToast.success(
+      context,
+      LanguageManager.isEnglish()
+          ? 'Quick emoji updated'
+          : 'Đã cập nhật biểu tượng nhanh',
+    );
+    final convId = widget.conversationId;
+    final recId = widget.receiverId;
+    try {
+      await MessageService.updateQuickEmoji(
+        conversationId: convId,
+        receiverId: recId,
+        emoji: emoji,
+      );
+    } catch (e) {
+      debugPrint('updateQuickEmoji error: ');
+    }
+  }
+
   void _showEmojiPicker() {
-    final emojis = ['👍', '❤️', '🔥', '🎉', '👏', '😍', '😂', '⭐', '🤝', '💯'];
+    final defaultReactions = [
+      {'id': 'like', 'asset': 'assets/icons/like.png'},
+      {'id': 'love', 'asset': 'assets/icons/heart.png'},
+      {'id': 'care', 'asset': 'assets/icons/care.png'},
+      {'id': 'haha', 'asset': 'assets/icons/haha.png'},
+      {'id': 'wow', 'asset': 'assets/icons/wow.png'},
+      {'id': 'sad', 'asset': 'assets/icons/cry.png'},
+      {'id': 'angry', 'asset': 'assets/icons/angry.png'},
+    ];
+
+    final customList = _customEmojis.where((e) {
+      final a = ChatInfoScreen.getReactionAsset(e);
+      return !defaultReactions.any((r) => r['id'] == e || r['asset'] == a);
+    }).toList();
+
+    final currentAsset = ChatInfoScreen.getReactionAsset(_quickEmoji);
+    if (currentAsset == null && _quickEmoji.isNotEmpty && !customList.contains(_quickEmoji)) {
+      customList.add(_quickEmoji);
+    }
+
+    final int totalCount = defaultReactions.length + customList.length + 1;
+
     showModalBottomSheet(
       context: context,
-      backgroundColor: context.isDark ? const Color(0xFF222030) : Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20.r))),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 20.h),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: BoxDecoration(
+          color: context.cardBg,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 20,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        padding: EdgeInsets.only(
+          top: 12.h,
+          bottom: 24.h + MediaQuery.of(ctx).padding.bottom,
+          left: 20.w,
+          right: 20.w,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.chooseQuickEmoji, style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.bold)),
+            Center(
+              child: Container(
+                width: 38.w,
+                height: 4.5.h,
+                decoration: BoxDecoration(
+                  color: context.textMuted.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+            ),
             SizedBox(height: 16.h),
-            Wrap(
-              spacing: 12.w,
-              runSpacing: 12.h,
-              children: emojis.map((emoji) {
-                return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _quickEmoji = emoji;
-                    });
-                    Navigator.pop(ctx);
-                  },
-                  child: Container(
-                    padding: EdgeInsets.all(10.r),
-                    decoration: BoxDecoration(
-                      color: _quickEmoji == emoji
-                          ? AppColors.blue.withValues(alpha: 0.2)
-                          : (context.isDark ? Colors.white10 : const Color(0xFFF2F4F7)),
-                      borderRadius: BorderRadius.circular(12.r),
-                    ),
-                    child: Text(emoji, style: TextStyle(fontSize: 24.sp)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  l10n.chooseQuickEmoji,
+                  style: TextStyle(
+                    fontSize: 18.sp,
+                    fontWeight: FontWeight.bold,
+                    color: context.textPrimary,
                   ),
-                );
-              }).toList(),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.pop(ctx),
+                  child: Container(
+                    padding: EdgeInsets.all(4.r),
+                    decoration: BoxDecoration(
+                      color: context.isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 20.r,
+                      color: context.textMuted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 20.h),
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 5,
+                mainAxisSpacing: 12.h,
+                crossAxisSpacing: 12.w,
+                childAspectRatio: 1.0,
+              ),
+              itemCount: totalCount,
+              itemBuilder: (context, index) {
+                if (index < defaultReactions.length) {
+                  final item = defaultReactions[index];
+                  final itemId = item['id']!;
+                  final itemAsset = item['asset']!;
+                  final isSelected = _quickEmoji.toLowerCase() == itemId ||
+                      ChatInfoScreen.getReactionAsset(_quickEmoji) == itemAsset;
+
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _setQuickEmoji(itemId);
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppColors.blue.withValues(alpha: 0.2)
+                            : (context.isDark ? Colors.white10 : const Color(0xFFF2F4F7)),
+                        borderRadius: BorderRadius.circular(14.r),
+                        border: isSelected
+                            ? Border.all(color: AppColors.blue, width: 1.5)
+                            : null,
+                      ),
+                      child: Center(
+                        child: Image.asset(
+                          itemAsset,
+                          width: 34.r,
+                          height: 34.r,
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    ),
+                  );
+                } else if (index < defaultReactions.length + customList.length) {
+                  final customEmoji = customList[index - defaultReactions.length];
+                  final isSelected = _quickEmoji == customEmoji;
+
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _setQuickEmoji(customEmoji);
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppColors.blue.withValues(alpha: 0.2)
+                            : (context.isDark ? Colors.white10 : const Color(0xFFF2F4F7)),
+                        borderRadius: BorderRadius.circular(14.r),
+                        border: isSelected
+                            ? Border.all(color: AppColors.blue, width: 1.5)
+                            : null,
+                      ),
+                      child: Center(
+                        child: Text(
+                          customEmoji,
+                          style: TextStyle(fontSize: 26.sp),
+                        ),
+                      ),
+                    ),
+                  );
+                } else {
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _showAddCustomEmojiDialog();
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: context.isDark ? Colors.white10 : const Color(0xFFF2F4F7),
+                        borderRadius: BorderRadius.circular(14.r),
+                        border: Border.all(
+                          color: context.isDark ? Colors.white24 : Colors.black12,
+                          width: 1,
+                        ),
+                      ),
+                      child: Center(
+                        child: Icon(
+                          Icons.add_rounded,
+                          size: 26.r,
+                          color: context.textPrimary,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+              },
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  void _showAddCustomEmojiDialog() {
+    final popularEmojis = [
+      '🥳', '😎', '🤔', '🥺', '🚀', '✨', '💡', '💖',
+      '🤩', '☕', '🙌', '🎈', '⚡', '🎯', '🐱', '🌸',
+      '🍕', '🍻', '💪', '🏆', '👀', '🤫', '🤤', '😴',
+    ];
+    final controller = TextEditingController();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDlgState) => Container(
+          decoration: BoxDecoration(
+            color: context.cardBg,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 20,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          padding: EdgeInsets.only(
+            left: 20.w,
+            right: 20.w,
+            top: 12.h,
+            bottom: MediaQuery.of(dlgCtx).viewInsets.bottom + 24.h + MediaQuery.of(dlgCtx).padding.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38.w,
+                  height: 4.5.h,
+                  decoration: BoxDecoration(
+                    color: context.textMuted.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ),
+              SizedBox(height: 16.h),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    LanguageManager.isEnglish() ? 'Add Custom Emoji' : 'Thêm biểu tượng cảm xúc',
+                    style: TextStyle(
+                      fontSize: 18.sp,
+                      fontWeight: FontWeight.bold,
+                      color: context.textPrimary,
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(dlgCtx),
+                    child: Container(
+                      padding: EdgeInsets.all(4.r),
+                      decoration: BoxDecoration(
+                        color: context.isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 20.r,
+                        color: context.textMuted,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 16.h),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      autofocus: false,
+                      style: TextStyle(fontSize: 18.sp, color: context.textPrimary),
+                      decoration: InputDecoration(
+                        hintText: LanguageManager.isEnglish() ? 'Type or paste emoji...' : 'Nhập hoặc dán emoji...',
+                        hintStyle: TextStyle(fontSize: 14.sp, color: context.textMuted),
+                        filled: true,
+                        fillColor: context.isDark ? Colors.white10 : const Color(0xFFF2F4F7),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14.r), borderSide: BorderSide.none),
+                      ),
+                      onChanged: (_) => setDlgState(() {}),
+                    ),
+                  ),
+                  SizedBox(width: 10.w),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.blue,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                      padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 14.h),
+                      elevation: 0,
+                    ),
+                    onPressed: controller.text.trim().isEmpty
+                        ? null
+                        : () {
+                            final custom = controller.text.trim();
+                            Navigator.pop(dlgCtx);
+                            _setQuickEmoji(custom);
+                          },
+                    child: Text(
+                      l10n.save,
+                      style: TextStyle(fontSize: 14.sp, color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 18.h),
+              Text(
+                LanguageManager.isEnglish() ? 'Suggested emojis' : 'Gợi ý biểu tượng',
+                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: context.textMuted),
+              ),
+              SizedBox(height: 12.h),
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 6,
+                  mainAxisSpacing: 10.h,
+                  crossAxisSpacing: 10.w,
+                  childAspectRatio: 1.0,
+                ),
+                itemCount: popularEmojis.length,
+                itemBuilder: (context, index) {
+                  final emoji = popularEmojis[index];
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(12.r),
+                    onTap: () {
+                      Navigator.pop(dlgCtx);
+                      _setQuickEmoji(emoji);
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: context.isDark ? Colors.white10 : const Color(0xFFF2F4F7),
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: Center(
+                        child: Text(emoji, style: TextStyle(fontSize: 22.sp)),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -704,25 +1493,81 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: context.isDark ? const Color(0xFF222030) : Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20.r))),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 20.h),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: BoxDecoration(
+          color: context.cardBg,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 20,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        padding: EdgeInsets.only(
+          top: 12.h,
+          bottom: 24.h + MediaQuery.of(ctx).padding.bottom,
+          left: 20.w,
+          right: 20.w,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.chooseChatTheme, style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.bold)),
+            Center(
+              child: Container(
+                width: 38.w,
+                height: 4.5.h,
+                decoration: BoxDecoration(
+                  color: context.textMuted.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+            ),
+            SizedBox(height: 16.h),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  l10n.chooseChatTheme,
+                  style: TextStyle(
+                    fontSize: 18.sp,
+                    fontWeight: FontWeight.bold,
+                    color: context.textPrimary,
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.pop(ctx),
+                  child: Container(
+                    padding: EdgeInsets.all(4.r),
+                    decoration: BoxDecoration(
+                      color: context.isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 20.r,
+                      color: context.textMuted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
             SizedBox(height: 16.h),
             ...themes.map((t) {
               final color = t['color'] as Color;
               final name = t['name'] as String;
               return ListTile(
+                contentPadding: EdgeInsets.zero,
                 leading: CircleAvatar(backgroundColor: color, radius: 14.r),
-                title: Text(name, style: TextStyle(fontSize: 14.5.sp)),
+                title: Text(name, style: TextStyle(fontSize: 14.5.sp, color: context.textPrimary)),
+                trailing: Icon(Icons.arrow_forward_ios_rounded, size: 14.r, color: context.textMuted),
                 onTap: () {
                   Navigator.pop(ctx);
-                  AppToast.info(context, '${l10n.themeSelectedToast}: $name');
+                  AppToast.info(context, ': ');
                 },
               );
             }),

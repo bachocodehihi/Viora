@@ -225,7 +225,7 @@ class _MainScreenState extends State<MainScreen> {
         inactiveIcon: Icons.notifications_outlined,
         activeIcon: Icons.notifications_rounded,
         label: l10n.notificationsNav,
-        hasBadge: _hasUnreadNotifications,
+        hasBadge: false,
       ),
       NavItemData(inactiveIcon: Icons.person_outline_rounded, activeIcon: Icons.person_rounded, label: l10n.profile),
     ];
@@ -642,28 +642,10 @@ class SlidingBottomNavBar extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Icon(
-                isActive ? item.activeIcon : item.inactiveIcon,
-                color: isActive ? AppColors.white : AppColors.gray,
-                size: 24.r,
-              ),
-              if (item.hasBadge && !isActive)
-                Positioned(
-                  top: -2.h,
-                  right: -2.w,
-                  child: Container(
-                    width: 8.r,
-                    height: 8.r,
-                    decoration: const BoxDecoration(
-                      color: AppColors.red,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-            ],
+          Icon(
+            isActive ? item.activeIcon : item.inactiveIcon,
+            color: isActive ? AppColors.white : AppColors.gray,
+            size: 24.r,
           ),
           
           ClipRect(

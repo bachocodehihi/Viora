@@ -100,7 +100,7 @@ const createNotification = async ({
         notifBody = content ? `${senderName} published a new post: "${content.length > 50 ? content.substring(0, 47) + '...' : content}"` : `${senderName} published a new post`;
         break;
       case 'friend_story':
-        notifBody = `${senderName} shared a new story`;
+        notifBody = (content && (content.includes('reacted') || content.includes('cảm xúc'))) ? `${senderName} reacted to your story` : `${senderName} shared a new story`;
         break;
       case 'like':
         notifBody = `${senderName} liked your story`;

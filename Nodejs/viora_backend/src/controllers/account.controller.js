@@ -819,7 +819,6 @@ const unBlockAccount = async (req, res) => {
       }
     }
 
-    // Restore all hidden messages sent while blocked
     await Message.updateMany(
       {
         sender: targetUserId,
@@ -1065,7 +1064,7 @@ const editEducation = async (req, res) => {
 
 const updateProfile = async (req, res) => {
   try {
-    const { userId, email, username, bio, phone, address, homeTown, job, nationality, hobby, gender, birthday, avatar, coverImage, nationId, cityId, wardId, homeTownNationId, homeTownCityId, homeTownWardId, placesLived } = req.body;
+    const { userId, email, username, bio, phone, address, homeTown, job, nationality, hobby, gender, birthday, avatar, coverImage, nationId, cityId, wardId, homeTownNationId, homeTownCityId, homeTownWardId, placesLived, relationship } = req.body;
     let query = {};
 
     if (userId) {
@@ -1093,6 +1092,7 @@ const updateProfile = async (req, res) => {
     if (job !== undefined) updateFields.job = job;
     if (nationality !== undefined) updateFields.nationality = nationality;
     if (hobby !== undefined) updateFields.hobby = hobby;
+    if (relationship !== undefined) updateFields.relationship = relationship || '';
     if (gender !== undefined) updateFields.gender = gender;
     if (nationId !== undefined) updateFields.nationId = nationId || null;
     if (cityId !== undefined) updateFields.cityId = cityId || null;
@@ -1294,20 +1294,32 @@ const scanUserQr = async (req, res) => {
     if (isGroupQr || targetGroupId) {
       let group = null;
       if (targetGroupId && mongoose.Types.ObjectId.isValid(targetGroupId)) {
-        group = await Group.findById(targetGroupId);
+        group = await Group.findOne({
+          $or: [{ _id: targetGroupId }, { chatConversation: targetGroupId }]
+        });
+        if (!group) {
+          const conv = await Conversation.findById(targetGroupId);
+          if (conv?.communityGroup) {
+            group = await Group.findById(conv.communityGroup);
+          }
+        }
       }
       if (!group) {
         group = await Group.findOne({ qrCode: clean });
       }
+      if (!group && mongoose.Types.ObjectId.isValid(clean)) {
+        group = await Group.findOne({
+          $or: [{ _id: clean }, { chatConversation: clean }]
+        });
+      }
 
       if (group) {
         const viewerId = getViewerIdFromReq(req);
-        const isMember = viewerId ? (
-          group.owner?.toString() === viewerId.toString() ||
-          group.members?.some((m) => m.user?.toString() === viewerId.toString())
-        ) : false;
+        const isOwner = !!(viewerId && (group.owner?._id || group.owner)?.toString() === viewerId.toString());
+        const myMember = viewerId && group.members?.find((m) => (m.user?._id || m.user)?.toString() === viewerId.toString());
+        const isMember = !!(isOwner || myMember);
         const hasRequested = viewerId ? (
-          group.joinRequests?.some((r) => r.user?.toString() === viewerId.toString())
+          group.joinRequests?.some((r) => (r.user?._id || r.user)?.toString() === viewerId.toString())
         ) : false;
 
         return res.status(200).json({
@@ -1327,6 +1339,30 @@ const scanUserQr = async (req, res) => {
             conversationId: group.chatConversation ? group.chatConversation.toString() : null,
           },
         });
+      }
+
+      if (targetGroupId && mongoose.Types.ObjectId.isValid(targetGroupId)) {
+        const conv = await Conversation.findById(targetGroupId);
+        if (conv && conv.type === 'group_chat') {
+          const viewerId = getViewerIdFromReq(req);
+          const isMember = viewerId && conv.members?.some((m) => (m.user?._id || m.user)?.toString() === viewerId.toString());
+          return res.status(200).json({
+            success: true,
+            type: 'group',
+            data: {
+              id: conv._id.toString(),
+              groupId: conv._id.toString(),
+              name: conv.name || 'Chat Group',
+              avatar: conv.avatar || '',
+              privacy: 'private',
+              description: '',
+              membersCount: conv.members?.length || 1,
+              isMember: !!isMember,
+              hasRequested: false,
+              conversationId: conv._id.toString(),
+            },
+          });
+        }
       }
     }
 

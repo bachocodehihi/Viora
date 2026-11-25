@@ -1083,17 +1083,15 @@ class _CallScreenState extends State<CallScreen> {
                 },
                 child: Stack(
                   children: [
-                    // Main background / remote video or voice layout
+
                     Positioned.fill(
                       child: _isVideoUiMode
                           ? _buildVideoStage(l10n, statusText)
                           : _buildVoiceStage(l10n, statusText),
                     ),
 
-                    // Draggable PiP card when local camera OR swapped view is active
                     if (_shouldShowPiP) _buildDraggablePiP(),
 
-                    // Top bar (visible in video mode or subtle header)
                     AnimatedPositioned(
                       duration: const Duration(milliseconds: 220),
                       top: _controlsVisible || !_isVideoUiMode ? 0 : -120.h,
@@ -1102,7 +1100,6 @@ class _CallScreenState extends State<CallScreen> {
                       child: _buildTopOverlay(l10n, statusText),
                     ),
 
-                    // Bottom call control dock
                     AnimatedPositioned(
                       duration: const Duration(milliseconds: 220),
                       bottom: _controlsVisible || !_isVideoUiMode ? 0 : -180.h,
@@ -1590,12 +1587,10 @@ class _CallScreenState extends State<CallScreen> {
         .where((uid) => _remoteVideoActive[uid] == true && _remoteVideoControllers.containsKey(uid))
         .toList();
 
-    // If user swapped local to fullscreen and there is exactly 1 remote video
     if (_swapPiP && _localVideoEnabled && _localVideoController != null) {
       return AgoraVideoView(controller: _localVideoController!);
     }
 
-    // Multi-party remote video grid for group calls
     if (widget.isGroup && activeRemoteUids.length > 1) {
       return SafeArea(
         child: Padding(
@@ -1620,13 +1615,11 @@ class _CallScreenState extends State<CallScreen> {
       );
     }
 
-    // 1-1 or single remote stream active
     if (activeRemoteUids.isNotEmpty) {
       final uid = activeRemoteUids.first;
       return AgoraVideoView(controller: _remoteVideoControllers[uid]!);
     }
 
-    // Local camera is ON, remote peer hasn't joined yet -> fullscreen local preview while calling!
     if (!_isConnected && _localVideoEnabled && _localVideoController != null) {
       return Stack(
         fit: StackFit.expand,
@@ -1667,7 +1660,6 @@ class _CallScreenState extends State<CallScreen> {
       );
     }
 
-    // Connected in audio mode while local camera was turned ON mid-call (peer cam is OFF)
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(

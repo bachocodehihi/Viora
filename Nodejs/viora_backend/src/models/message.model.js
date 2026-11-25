@@ -9,12 +9,14 @@ const messageSchema = new mongoose.Schema({
   sender: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Account',
-    required: true
+    required: false,
+    default: null
   },
+  isAi: { type: Boolean, default: false },
   content: { type: String, default: '' },
   type: {
     type: String,
-    enum: ['text', 'image', 'video', 'file', 'audio', 'location', 'system', 'poll', 'call'],
+    enum: ['text', 'image', 'video', 'file', 'audio', 'location', 'system', 'poll', 'call', 'emoji'],
     default: 'text'
   },
   call: {
@@ -77,7 +79,12 @@ const messageSchema = new mongoose.Schema({
     ref: 'Message',
     default: null
   },
+  postId: { type: String, default: null },
   attachments: [{ type: String }],
+  duration: { type: Number, default: 0 },
+  amplitudes: [{ type: Number }],
+  mentionAll: { type: Boolean, default: false },
+  mentions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Account' }],
   reactions: [
     {
       user: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', required: true },

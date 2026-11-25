@@ -4,10 +4,6 @@ version: 3.1.6
 homepage: https://github.com/hiennguyen92/flutter_callkit_incoming
 repository: https://github.com/hiennguyen92/flutter_callkit_incoming
 issue_tracker: https://github.com/hiennguyen92/flutter_callkit_incoming/issues
-screenshots:
-  - description: "lock screen"
-    path: images/image6.jpg
-
 false_secrets:
   - /example/**
 

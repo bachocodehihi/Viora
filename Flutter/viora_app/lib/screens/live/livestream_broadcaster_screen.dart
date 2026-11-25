@@ -61,7 +61,13 @@ class _LivestreamBroadcasterScreenState extends State<LivestreamBroadcasterScree
   String get _channelName => widget.liveData['channelName']?.toString() ?? '';
   String get _token => widget.liveData['token']?.toString() ?? '';
   String get _appId => widget.liveData['appId']?.toString() ?? '';
-  String get _title => widget.liveData['liveStream']?['title']?.toString() ?? l10n.liveStreamTitleDefault;
+  String get _title {
+    final raw = widget.liveData['liveStream']?['title']?.toString();
+    if (raw == null || raw.isEmpty || raw == 'Buổi phát trực tiếp' || raw == 'Live Stream') {
+      return l10n.liveStreamTitleDefault;
+    }
+    return raw;
+  }
 
   @override
   void initState() {

@@ -120,6 +120,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> with SingleTickerProviderSt
 
         if (userAccount['groupId'] != null || userAccount['privacy'] != null) {
           final gId = userAccount['groupId']?.toString() ?? userAccount['id']?.toString() ?? '';
+          final isMember = userAccount['isMember'] == true;
           await Navigator.pushReplacementNamed(
             context,
             AppRoutes.profileGroup,
@@ -132,6 +133,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> with SingleTickerProviderSt
               'description': userAccount['description']?.toString() ?? '',
               'membersCount': (userAccount['membersCount'] as num?)?.toInt() ?? 1,
               'conversationId': userAccount['conversationId']?.toString(),
+              'isMember': isMember,
             },
           );
           return;
@@ -176,6 +178,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> with SingleTickerProviderSt
               'groupId': gId,
               'name': localParsed['name']?.toString() ?? l10n.group,
               'privacy': localParsed['privacy']?.toString() ?? 'public',
+              'isMember': false,
             },
           );
           return;

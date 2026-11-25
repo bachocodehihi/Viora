@@ -24,6 +24,7 @@ class ProfileGroupScreen extends StatefulWidget {
   final String? conversationId;
   final String? groupId;
   final String? privacy;
+  final bool? isMember;
 
   const ProfileGroupScreen({
     super.key,
@@ -35,6 +36,7 @@ class ProfileGroupScreen extends StatefulWidget {
     this.conversationId,
     this.groupId,
     this.privacy,
+    this.isMember,
   });
 
   @override
@@ -42,6 +44,7 @@ class ProfileGroupScreen extends StatefulWidget {
 }
 
 class _ProfileGroupScreenState extends State<ProfileGroupScreen> {
+  final GlobalKey _moreMenuKey = GlobalKey();
   bool _isActionLoading = false;
 
   late String _groupName;
@@ -52,7 +55,7 @@ class _ProfileGroupScreenState extends State<ProfileGroupScreen> {
   String? _conversationId;
   String _groupQrCode = '';
 
-  bool _isMember = true;
+  bool _isMember = false;
   bool _isAdmin = false;
   bool _hasRequested = false;
   int _pendingRequestsCount = 0;
@@ -74,6 +77,7 @@ class _ProfileGroupScreenState extends State<ProfileGroupScreen> {
     _membersCount = widget.membersCount;
     _description = widget.description ?? '';
     _conversationId = widget.conversationId;
+    _isMember = widget.isMember ?? false;
 
     _fetchGroupDetails();
     _loadMySession();
@@ -196,7 +200,11 @@ class _ProfileGroupScreenState extends State<ProfileGroupScreen> {
 
     if (res != null && res['success'] == true) {
       AppToast.success(context, res['message']?.toString() ?? l10n.joinedGroupSuccess);
+      setState(() {
+        _isMember = true;
+      });
       _fetchGroupDetails();
+      _fetchGroupPosts();
     } else {
       AppToast.error(context, l10n.errorFromCode(res?['code'], fallbackMessage: res?['message']?.toString() ?? l10n.requestConnectionError));
     }
@@ -341,6 +349,141 @@ class _ProfileGroupScreenState extends State<ProfileGroupScreen> {
       ),
     );
     _fetchGroupDetails();
+  }
+
+  void _showGroupMenu(BuildContext context, Language l10n) {
+    final RenderBox? renderBox = _moreMenuKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+
+    final Offset buttonOffset = renderBox.localToGlobal(Offset.zero);
+    final Size buttonSize = renderBox.size;
+    final Size screenSize = MediaQuery.of(context).size;
+
+    final double menuRight = (screenSize.width - (buttonOffset.dx + buttonSize.width))
+        .clamp(12.0, screenSize.width - 172.0);
+    final double menuTop = buttonOffset.dy + buttonSize.height + 6;
+
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'DismissGroupMenu',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (dialogCtx, anim1, anim2) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.pop(dialogCtx),
+                behavior: HitTestBehavior.opaque,
+                child: const SizedBox.expand(),
+              ),
+            ),
+            Positioned(
+              right: menuRight,
+              top: menuTop,
+              child: Material(
+                type: MaterialType.transparency,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 152, maxWidth: 220),
+                  decoration: BoxDecoration(
+                    color: context.isDark ? const Color(0xFF1E1E2C) : Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: context.isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
+                      width: 0.8,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: context.isDark ? 0.45 : 0.18),
+                        blurRadius: 18,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: IntrinsicWidth(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildGroupMenuItem(
+                            dialogCtx: dialogCtx,
+                            icon: Icons.people_outline_rounded,
+                            title: l10n.viewMemberList,
+                            color: dialogCtx.textPrimary,
+                            onTap: _showMembersBottomSheet,
+                          ),
+                          Divider(height: 1, thickness: 0.8, color: context.dividerTheme),
+                          _buildGroupMenuItem(
+                            dialogCtx: dialogCtx,
+                            icon: Icons.logout_rounded,
+                            title: l10n.leaveGroupBtn,
+                            color: Colors.redAccent,
+                            onTap: _handleLeaveGroup,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+      transitionBuilder: (dialogCtx, anim, secAnim, child) {
+        return FadeTransition(
+          opacity: CurvedAnimation(parent: anim, curve: Curves.easeOut),
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.85, end: 1.0).animate(
+              CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
+            ),
+            alignment: Alignment.topRight,
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildGroupMenuItem({
+    required BuildContext dialogCtx,
+    required IconData icon,
+    required String title,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          Navigator.pop(dialogCtx);
+          onTap();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: color, size: 18),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w500,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _handleLeaveGroup() async {
@@ -583,59 +726,37 @@ class _ProfileGroupScreenState extends State<ProfileGroupScreen> {
 
                   Positioned(
                     top: MediaQuery.of(context).padding.top + 10,
-                    right: _isMember ? 64 : 16,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Material(
-                        color: Colors.black.withValues(alpha: 0.25),
-                        child: IconButton(
-                          icon: const Icon(Icons.qr_code_rounded, color: Colors.white, size: 20),
-                          onPressed: _showGroupQrCodeModal,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  if (_isMember)
-                    Positioned(
-                      top: MediaQuery.of(context).padding.top + 10,
-                      right: 16,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child: Material(
-                          color: Colors.black.withValues(alpha: 0.25),
-                          child: PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_vert_rounded, color: Colors.white, size: 22),
-                            onSelected: (val) {
-                              if (val == 'members') _showMembersBottomSheet();
-                              if (val == 'leave') _handleLeaveGroup();
-                            },
-                            itemBuilder: (_) => [
-                              PopupMenuItem(
-                                value: 'members',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.people_outline_rounded, color: context.textPrimary, size: 18),
-                                    const SizedBox(width: 8),
-                                    Text(l10n.viewMemberList, style: TextStyle(color: context.textPrimary)),
-                                  ],
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'leave',
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.logout_rounded, color: Colors.redAccent, size: 18),
-                                    const SizedBox(width: 8),
-                                    Text(l10n.leaveGroupBtn, style: const TextStyle(color: Colors.redAccent)),
-                                  ],
-                                ),
-                              ),
-                            ],
+                    right: 16,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: Material(
+                            color: Colors.black.withValues(alpha: 0.25),
+                            child: IconButton(
+                              icon: const Icon(Icons.qr_code_rounded, color: Colors.white, size: 20),
+                              onPressed: _showGroupQrCodeModal,
+                            ),
                           ),
                         ),
-                      ),
+                        if (_isMember) ...[
+                          const SizedBox(width: 10),
+                          ClipRRect(
+                            key: _moreMenuKey,
+                            borderRadius: BorderRadius.circular(14),
+                            child: Material(
+                              color: Colors.black.withValues(alpha: 0.25),
+                              child: IconButton(
+                                icon: const Icon(Icons.more_vert_rounded, color: Colors.white, size: 22),
+                                onPressed: () => _showGroupMenu(context, l10n),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
+                  ),
 
                   Positioned(
                     bottom: 0,
@@ -762,10 +883,14 @@ class _ProfileGroupScreenState extends State<ProfileGroupScreen> {
               ),
             ],
 
-            if (_isMember || _groupPrivacy == 'public') ...[
+            if (_isMember) ...[
               const SizedBox(height: 18),
               _buildCreatePostTrigger(),
               const SizedBox(height: 10),
+            ],
+
+            if (_isMember || _groupPrivacy == 'public') ...[
+              if (!_isMember) const SizedBox(height: 18),
               _buildGroupFeed(),
             ] else ...[
 

@@ -35,6 +35,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _job;
   String? _nationality;
   String? _hobby;
+  String? _relationship;
   String? _qrCode;
   String? _userId;
   String? _homeTown;
@@ -233,6 +234,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               _job = account['job']?.toString() ?? _job;
               _nationality = account['nationality']?.toString() ?? _nationality;
               _hobby = account['hobby']?.toString() ?? _hobby;
+              _relationship = account['relationship']?.toString() ?? _relationship;
               _qrCode = account['qrCode']?.toString() ?? _qrCode;
               _userId = account['_id']?.toString() ?? account['id']?.toString() ?? _userId;
 
@@ -397,12 +399,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   String _formatGender(BuildContext context, String? raw) {
+    final l10n = context.l10n;
     if (raw == null || raw.isEmpty) return l10n.notUpdated;
     final lower = raw.toLowerCase().trim();
     if (lower == 'male') return l10n.male;
     if (lower == 'female') return l10n.female;
     if (lower == 'other') return l10n.other;
     return raw;
+  }
+
+  String _formatRelationship(BuildContext context, String? raw) {
+    final l10n = context.l10n;
+    if (raw == null || raw.isEmpty) return l10n.notUpdated;
+    switch (raw.toLowerCase().trim()) {
+      case 'single':
+        return l10n.singleStatus;
+      case 'dating':
+        return l10n.datingStatus;
+      case 'engaged':
+        return l10n.engagedStatus;
+      case 'married':
+        return l10n.marriedStatus;
+      case 'complicated':
+        return l10n.complicatedStatus;
+      case 'exploring':
+        return l10n.exploringStatus;
+      default:
+        return raw;
+    }
   }
 
   @override
@@ -799,6 +823,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             addRow(Icons.palette_outlined, l10n.hobbies, _hobby!.trim());
                           }
 
+                          if (_relationship != null && _relationship!.trim().isNotEmpty) {
+                            addRow(Icons.favorite_outline, l10n.relationship, _formatRelationship(context, _relationship));
+                          }
+
                           return infoRows.isNotEmpty
                               ? infoRows
                               : [
@@ -815,7 +843,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         }(),
                       ),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 28),
                     Text(
                       l10n.allPosts,
                       style: TextStyle(
@@ -884,6 +912,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       )
                     else
                       ListView.builder(
+                        padding: EdgeInsets.zero,
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: _posts.length,
@@ -1138,6 +1167,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           job: _job,
           nationality: _nationality,
           hobby: _hobby,
+          relationship: _relationship,
           avatar: _avatar,
           coverImage: _coverImage,
           placesLived: _placesLived,

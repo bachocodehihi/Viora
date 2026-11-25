@@ -37,10 +37,9 @@ RegExp buildChatMentionRegex(List<String> memberNames) {
     r'all',
     r'Mọi\s+người',
     r'mọi\s+người',
-    r'Moi\s+nguoi',
-    r'moi\s+nguoi',
     r'everyone',
     r'Everyone',
+    r'Viora\s*AI',
   ];
 
   final escapedNames = memberNames
@@ -232,32 +231,50 @@ class ChatMentionSuggestionsBox extends StatelessWidget {
           itemBuilder: (context, index) {
             final item = suggestions[index];
             final bool isAll = item['isAll'] == true;
+            final bool isAi = item['isAi'] == true;
             final String name = (item['name'] ?? '').toString();
             final String? subtitle = item['subtitle']?.toString();
 
             return ListTile(
               dense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: isAll ? 2.h : 4.h),
-              leading: isAll
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 14.w,
+                vertical: (isAll || isAi) ? 2.h : 4.h,
+              ),
+              leading: isAi
                   ? Container(
                       width: 36.r,
                       height: 36.r,
                       decoration: const BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [AppColors.blue, Color(0xFF6C5CE7)],
+                          colors: [Color(0xFF3B82F6), Color(0xFF8B5CF6)],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                         ),
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(Icons.groups_rounded, color: Colors.white, size: 20.r),
+                      child: Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 19.r),
                     )
-                  : AppAvatar(
-                      avatar: item['avatar'],
-                      name: name,
-                      radius: 18.r,
-                      fontSize: 12.sp,
-                    ),
+                  : isAll
+                      ? Container(
+                          width: 36.r,
+                          height: 36.r,
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [AppColors.blue, Color(0xFF6C5CE7)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(Icons.groups_rounded, color: Colors.white, size: 20.r),
+                        )
+                      : AppAvatar(
+                          avatar: item['avatar'],
+                          name: name,
+                          radius: 18.r,
+                          fontSize: 12.sp,
+                        ),
               title: Row(
                 children: [
                   Text(
@@ -265,10 +282,34 @@ class ChatMentionSuggestionsBox extends StatelessWidget {
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 13.5.sp,
-                      color: isAll ? AppColors.blue : context.textPrimary,
+                      color: isAi
+                          ? const Color(0xFF8B5CF6)
+                          : (isAll ? AppColors.blue : context.textPrimary),
                     ),
                   ),
-                  if (isAll) ...[
+                  if (isAi) ...[
+                    SizedBox(width: 6.w),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            const Color(0xFF3B82F6).withValues(alpha: 0.16),
+                            const Color(0xFF8B5CF6).withValues(alpha: 0.2),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(8.r),
+                      ),
+                      child: Text(
+                        'AI',
+                        style: TextStyle(
+                          fontSize: 9.sp,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF8B5CF6),
+                        ),
+                      ),
+                    ),
+                  ] else if (isAll) ...[
                     SizedBox(width: 6.w),
                     Container(
                       padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
@@ -288,7 +329,7 @@ class ChatMentionSuggestionsBox extends StatelessWidget {
                   ],
                 ],
               ),
-              subtitle: (isAll && subtitle != null && subtitle.isNotEmpty)
+              subtitle: ((isAll || isAi) && subtitle != null && subtitle.isNotEmpty)
                   ? Text(
                       subtitle,
                       maxLines: 1,

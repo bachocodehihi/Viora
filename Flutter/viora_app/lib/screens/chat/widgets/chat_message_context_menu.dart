@@ -60,12 +60,12 @@ class ChatMessageContextMenu {
         final bool canRecall = isMe && msg['isRecalled'] != true && !isCall;
         final int menuItemCount = isPoll
             ? 1
-            : (1 + // reply
+            : (1 + 
                 (canCopy ? 1 : 0) +
                 (canForward ? 1 : 0) +
-                1 + // pin
+                1 + 
                 (canRecall ? 1 : 0) +
-                1); // delete
+                1); 
         final double itemHeight = 40.h;
         final double menuHeight = menuItemCount * itemHeight + (menuItemCount - 1) * 1.0;
 

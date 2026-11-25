@@ -74,7 +74,27 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     _loadUserSession();
     _loadComments();
 
+    if ((_post['content'] == null || _authorUserId == null || _post['createdAt'] == null) &&
+        _postId.isNotEmpty &&
+        _postId != 'temp') {
+      _loadPostDetails();
+    }
+
     SocketService.onPostLiked(_onSocketPostLiked);
+  }
+
+  Future<void> _loadPostDetails() async {
+    final fresh = await PostService.getPost(_postId);
+    if (fresh != null && mounted) {
+      setState(() {
+        _post.addAll(fresh);
+        _likesCount = int.tryParse(_post['likes']?.toString() ?? '0') ?? _likesCount;
+        _isLiked = _post['isLiked'] == true;
+        _reactionStr = _post['reaction']?.toString();
+        _commentsCount = int.tryParse(_post['comments']?.toString() ?? '0') ?? _commentsCount;
+      });
+      widget.onPostUpdated?.call(_post);
+    }
   }
 
   void _onSocketPostLiked(Map<String, dynamic> data) {
@@ -492,6 +512,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                     children: [
 
                       Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           if (_isGroupPost && _groupName != null && _groupName!.trim().isNotEmpty) ...[
                             GestureDetector(
@@ -616,12 +637,16 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                   Row(
                                     children: [
                                       if (_isAnonymousPost) ...[
-                                        Text(
-                                          authorName,
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: context.textSubtle,
-                                            fontWeight: FontWeight.w500,
+                                        Flexible(
+                                          child: Text(
+                                            authorName,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: context.textSubtle,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
                                           ),
                                         ),
                                         const SizedBox(width: 4),
@@ -641,26 +666,36 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                           ),
                                         ),
                                       ] else ...[
-                                        GestureDetector(
-                                          onTap: () {
-                                            Navigator.pushNamed(
-                                              context,
-                                              AppRoutes.profileAccount,
-                                              arguments: {
-                                                'id': _authorUserId ?? _post['userId'] ?? _postId,
-                                                'email': _authorEmail ?? _post['userEmail'],
-                                                'name': authorName,
-                                                'avatar': avatarUrl,
-                                                'color': authorColor,
-                                              },
-                                            );
-                                          },
-                                          child: Text(
-                                            authorName,
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: context.textSubtle,
-                                              fontWeight: FontWeight.w500,
+                                        Flexible(
+                                          child: GestureDetector(
+                                            onTap: () {
+                                              final targetId = (_authorUserId != null && _authorUserId!.isNotEmpty && _authorUserId != 'temp')
+                                                  ? _authorUserId
+                                                  : ((_post['userId'] != null && _post['userId'].toString().isNotEmpty && _post['userId'].toString() != 'temp')
+                                                      ? _post['userId'].toString()
+                                                      : null);
+                                              if (targetId == null) return;
+                                              Navigator.pushNamed(
+                                                context,
+                                                AppRoutes.profileAccount,
+                                                arguments: {
+                                                  'id': targetId,
+                                                  'email': _authorEmail ?? _post['userEmail'],
+                                                  'name': authorName,
+                                                  'avatar': avatarUrl,
+                                                  'color': authorColor,
+                                                },
+                                              );
+                                            },
+                                            child: Text(
+                                              authorName,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: context.textSubtle,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
                                         ),
@@ -699,11 +734,17 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                             else
                               GestureDetector(
                                 onTap: () {
+                                  final targetId = (_authorUserId != null && _authorUserId!.isNotEmpty && _authorUserId != 'temp')
+                                      ? _authorUserId
+                                      : ((_post['userId'] != null && _post['userId'].toString().isNotEmpty && _post['userId'].toString() != 'temp')
+                                          ? _post['userId'].toString()
+                                          : null);
+                                  if (targetId == null) return;
                                   Navigator.pushNamed(
                                     context,
                                     AppRoutes.profileAccount,
                                     arguments: {
-                                      'id': _authorUserId ?? _post['userId'] ?? _postId,
+                                      'id': targetId,
                                       'email': _authorEmail ?? _post['userEmail'],
                                       'name': authorName,
                                       'avatar': avatarUrl,
@@ -899,6 +940,8 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                 arguments: {
                                   'postAuthor': authorName,
                                   'postContent': contentStr,
+                                  'postId': _postId,
+                                  'post': _post,
                                 },
                               );
                             },

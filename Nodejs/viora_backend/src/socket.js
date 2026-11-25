@@ -1,11 +1,11 @@
 const { Server } = require('socket.io');
 
 let io;
-const activeUserSockets = new Map(); // userId (string) -> Set<socketId>
-const hiddenActiveStatusUsers = new Set(); // userId (string) who disabled active status visibility
+const activeUserSockets = new Map();
+const hiddenActiveStatusUsers = new Set();
 
-const liveViewersMap = new Map(); // liveId -> Map<socketId, { socketId, userId, userName, userAvatar }>
-const liveBlockedCommentsMap = new Map(); // liveId -> Set<userId>
+const liveViewersMap = new Map();
+const liveBlockedCommentsMap = new Map();
 
 const getLiveUniqueViewers = (liveId, hostId) => {
   const viewersMap = liveViewersMap.get(liveId);
@@ -16,12 +16,12 @@ const getLiveUniqueViewers = (liveId, hostId) => {
   for (const v of viewersMap.values()) {
     if (!v.userId) continue;
     const uIdStr = v.userId.toString();
-    if (hostId && uIdStr === hostId.toString()) continue; // Không đưa chủ phòng vào danh sách người xem
+    if (hostId && uIdStr === hostId.toString()) continue;
     if (!seen.has(uIdStr)) {
       seen.add(uIdStr);
       unique.push({
         userId: uIdStr,
-        userName: v.userName || 'Người xem',
+        userName: v.userName || 'Viewer',
         userAvatar: v.userAvatar || null,
         isCommentBlocked: blockedSet.has(uIdStr)
       });
@@ -82,7 +82,7 @@ const initSocket = (server) => {
       }
 
       if (uId) {
-        // If this socket was already associated with a different user (e.g. account switch on same device)
+
         if (socket.userId && socket.userId !== uId) {
           const oldUid = socket.userId;
           const oldSockets = activeUserSockets.get(oldUid);
@@ -135,7 +135,7 @@ const initSocket = (server) => {
           const acc = await Account.findById(uId).select('currentDeviceId currentDeviceName isDeleted deletionRequested deletionScheduledAt privacy');
           
           if (!acc || acc.isDeleted) {
-            socket.emit('account_deleted', { message: 'Tài khoản này đã bị xóa hoặc không còn tồn tại trên hệ thống.' });
+            socket.emit('account_deleted', { code: 'ACCOUNT_DELETED' });
             return;
           }
 
@@ -144,7 +144,7 @@ const initSocket = (server) => {
             acc.deletionRequested = false;
             acc.deleteAt = new Date();
             await acc.save();
-            socket.emit('account_deleted', { message: 'Tài khoản này đã bị xóa hoàn toàn khỏi hệ thống.' });
+            socket.emit('account_deleted', { code: 'ACCOUNT_DELETED' });
             return;
           }
 
@@ -160,7 +160,7 @@ const initSocket = (server) => {
           if (devId && acc.currentDeviceId && acc.currentDeviceId !== devId) {
             socket.emit('account_conflict', {
               deviceId: acc.currentDeviceId,
-              deviceName: acc.currentDeviceName || 'Thiết bị khác',
+              deviceName: acc.currentDeviceName || 'Device',
             });
           }
         } catch (err) {
@@ -207,7 +207,7 @@ const initSocket = (server) => {
     });
 
     socket.on('leave_conversation', (conversationId) => {
-      // Keep conversation room membership active so messages_screen receives instant push
+
     });
 
     socket.on('join_post', (postId) => {
@@ -502,7 +502,7 @@ const initSocket = (server) => {
         liveViewersMap.get(liveId).set(socket.id, {
           socketId: socket.id,
           userId: uIdStr,
-          userName: data.userName || 'Người xem',
+          userName: data.userName || 'Viewer',
           userAvatar: data.userAvatar || null
         });
 
@@ -528,13 +528,11 @@ const initSocket = (server) => {
             }
           });
 
-          // Gửi trạng thái chặn bình luận nếu người này đã bị chặn từ trước
           if (uIdStr && liveBlockedCommentsMap.get(liveId)?.has(uIdStr)) {
             socket.emit('live_comment_blocked', {
               liveId,
               userId: uIdStr,
-              isBlocked: true,
-              message: 'Bạn đã bị chủ phòng chặn bình luận.'
+              isBlocked: true
             });
           }
         }
@@ -612,7 +610,6 @@ const initSocket = (server) => {
           liveBlockedCommentsMap.get(liveId).delete(targetUserId);
         }
 
-        // Báo cho các socket của người dùng bị chặn
         const vMap = liveViewersMap.get(liveId);
         if (vMap) {
           for (const [sId, v] of vMap.entries()) {
@@ -620,14 +617,12 @@ const initSocket = (server) => {
               io.to(sId).emit('live_comment_blocked', {
                 liveId,
                 userId: targetUserId,
-                isBlocked,
-                message: isBlocked ? 'Bạn đã bị chủ phòng chặn bình luận.' : 'Bạn đã được chủ phòng mở lại bình luận.'
+                isBlocked
               });
             }
           }
         }
 
-        // Cập nhật lại danh sách người xem cho chủ phòng
         const LiveStream = require('./models/livestream.model');
         const live = await LiveStream.findById(liveId).lean();
         const hostId = live?.host?.toString();
@@ -650,7 +645,6 @@ const initSocket = (server) => {
         const targetUserId = data.userId.toString().trim();
         const room = `live_${liveId}`;
 
-        // Báo cho người bị đuổi và kick socket khỏi room lúc này (người xem vẫn có thể vào lại được nếu muốn)
         const vMap = liveViewersMap.get(liveId);
         if (vMap) {
           const toDelete = [];
@@ -658,8 +652,7 @@ const initSocket = (server) => {
             if (v.userId && v.userId.toString() === targetUserId) {
               io.to(sId).emit('kicked_from_live', {
                 liveId,
-                userId: targetUserId,
-                message: 'Bạn đã bị chủ phòng mời ra khỏi buổi phát trực tiếp.'
+                userId: targetUserId
               });
               const targetSocket = io.sockets.sockets.get(sId);
               if (targetSocket) {
@@ -697,15 +690,13 @@ const initSocket = (server) => {
         const liveId = data.liveId.toString().trim();
         const userId = data.userId ? data.userId.toString().trim() : '';
 
-        // Kiểm tra xem người này có bị chặn bình luận không
         if (userId && liveBlockedCommentsMap.get(liveId)?.has(userId)) {
           socket.emit('live_comment_blocked', {
             liveId,
             userId,
-            isBlocked: true,
-            message: 'Bạn đã bị chủ phòng chặn bình luận.'
+            isBlocked: true
           });
-          return; // Chặn không phát tin nhắn này đi
+          return;
         }
 
         const room = `live_${liveId}`;
@@ -714,7 +705,7 @@ const initSocket = (server) => {
           id: `comment_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           liveId,
           userId: data.userId,
-          userName: data.userName || 'Người dùng',
+          userName: data.userName || 'User',
           userAvatar: data.userAvatar || null,
           comment: data.comment.toString().trim(),
           createdAt: new Date()

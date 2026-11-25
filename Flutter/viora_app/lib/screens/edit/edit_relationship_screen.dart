@@ -29,6 +29,7 @@ class _EditRelationshipScreenState extends State<EditRelationshipScreen> {
   ];
 
   String _getStatusLabel(BuildContext context, String key) {
+    final l10n = context.l10n;
     switch (key.toLowerCase()) {
       case 'single':
         return l10n.singleStatus;
@@ -59,6 +60,7 @@ class _EditRelationshipScreenState extends State<EditRelationshipScreen> {
     try {
       await ProfileService.updateSingleField(fieldKey: 'relationship', value: _selectedStatus);
       if (mounted) {
+        final l10n = context.l10n;
         AppToast.success(context, l10n.updateRelationshipSuccess);
         Navigator.pop(context, _selectedStatus);
       }
@@ -94,12 +96,14 @@ class _EditRelationshipScreenState extends State<EditRelationshipScreen> {
                 final isSelected = _selectedStatus == key;
                 return Container(
                   margin: EdgeInsets.only(bottom: 10.h),
+                  clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     color: isSelected ? AppColors.blue.withValues(alpha: 0.1) : context.cardBg,
                     borderRadius: BorderRadius.circular(14.r),
                     border: Border.all(color: isSelected ? AppColors.blue : context.borderTheme.withValues(alpha: 0.3)),
                   ),
                   child: ListTile(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
                     title: Text(_getStatusLabel(context, key), style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.w500, color: context.textPrimary)),
                     trailing: isSelected ? const Icon(Icons.check_circle_rounded, color: AppColors.blue) : null,
                     onTap: () => setState(() => _selectedStatus = key),

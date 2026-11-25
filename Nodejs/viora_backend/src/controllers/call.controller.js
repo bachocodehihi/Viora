@@ -299,15 +299,15 @@ const formatMsgTime = (date) => {
 const buildCallFallbackText = (callType, status) => {
   const isVideo = callType === 'video';
   if (status === 'ringing' || status === 'ongoing') {
-    return isVideo ? 'Cuộc gọi video đang diễn ra' : 'Cuộc gọi thoại đang diễn ra';
+    return isVideo ? 'Ongoing video call' : 'Ongoing voice call';
   }
   if (status === 'completed') {
-    return isVideo ? 'Cuộc gọi video' : 'Cuộc gọi thoại';
+    return isVideo ? 'Video call' : 'Voice call';
   }
   if (status === 'declined') {
-    return isVideo ? 'Cuộc gọi video đã bị từ chối' : 'Cuộc gọi thoại đã bị từ chối';
+    return isVideo ? 'Declined video call' : 'Declined voice call';
   }
-  return isVideo ? 'Cuộc gọi video nhỡ' : 'Cuộc gọi nhỡ';
+  return isVideo ? 'Missed video call' : 'Missed voice call';
 };
 
 const upsertCallLogMessage = async (callDoc) => {
@@ -657,7 +657,6 @@ const cleanupStaleCallIfNeeded = async (call) => {
     return call;
   }
 
-  // status === 'ongoing'
   const activeIds = (call.activeParticipants || [])
     .map((p) => p?.toString())
     .filter(Boolean);
@@ -668,7 +667,7 @@ const cleanupStaleCallIfNeeded = async (call) => {
 
   let shouldFinalize = false;
   if (activeIds.length === 0) {
-    // Only finalize when genuinely left empty (> 5s grace for legacy/migration safety)
+
     if (now - lastActivityMs > 5000) {
       shouldFinalize = true;
     }

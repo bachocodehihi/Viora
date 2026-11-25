@@ -8,6 +8,7 @@ import '../../services/contact_service.dart';
 import '../../services/post_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../../widgets/toast/app_toast.dart';
+import '../../widgets/bottomsheet/app_livestream_setup_bottomsheet.dart';
 
 class PostAccountScreen extends StatefulWidget {
   final String email;
@@ -511,8 +512,9 @@ class _PostAccountScreenState extends State<PostAccountScreen> {
       child: Scaffold(
         backgroundColor: context.scaffoldBg,
         appBar: AppBar(
-          backgroundColor: context.scaffoldBg,
+          backgroundColor: Colors.transparent,
           elevation: 0,
+          titleSpacing: 0,
           leading: IconButton(
             icon: Icon(Icons.arrow_back_ios_new_rounded, color: context.textPrimary, size: 20),
             onPressed: () => Navigator.pop(context),
@@ -523,7 +525,7 @@ class _PostAccountScreenState extends State<PostAccountScreen> {
               fontFamily: 'Inter',
               color: context.textPrimary,
               fontWeight: FontWeight.bold,
-              fontSize: 18,
+              fontSize: 20,
             ),
           ),
           centerTitle: false,
@@ -563,14 +565,6 @@ class _PostAccountScreenState extends State<PostAccountScreen> {
               ),
             ),
           ],
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(1.0),
-            child: Divider(
-              height: 1,
-              thickness: 0.5,
-              color: context.dividerTheme,
-            ),
-          ),
         ),
         body: SafeArea(
           child: Column(
@@ -815,10 +809,14 @@ class _PostAccountScreenState extends State<PostAccountScreen> {
                       onPressed: _takePhoto,
                     ),
                     IconButton(
-                      icon: const Icon(Icons.sentiment_satisfied_alt_rounded, color: AppColors.orange, size: 22),
+                      icon: const Icon(Icons.sensors_rounded, color: Color(0xFFFF416C), size: 23),
+                      tooltip: l10n.liveBadge,
                       onPressed: () {
-                        _textController.text += ' 😊';
-                        _updateHasContent();
+                        AppLivestreamSetupBottomSheet.show(
+                          context,
+                          userAvatar: widget.userAvatar,
+                          userName: widget.userName,
+                        );
                       },
                     ),
                   ],

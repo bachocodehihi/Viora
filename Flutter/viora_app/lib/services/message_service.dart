@@ -117,10 +117,65 @@ class MessageService {
     Map<String, dynamic>? location,
     Map<String, dynamic>? poll,
     List<File>? imageFiles,
+    File? audioFile,
+    List<double>? amplitudes,
+    int? duration,
+    bool? mentionAll,
+    List<String>? mentions,
+    String? postId,
   }) async {
     try {
       final userId = await SessionService.getUserId();
       final token = await SessionService.getToken();
+
+      if (audioFile != null && await audioFile.exists()) {
+        final request = http.MultipartRequest('POST', Uri.parse(ApiConfig.sendMessage));
+        if (token != null && token.isNotEmpty) {
+          request.headers['Authorization'] = 'Bearer $token';
+        }
+        request.headers['Accept'] = 'application/json';
+
+        request.fields['content'] = content;
+        request.fields['type'] = 'audio';
+        if (conversationId != null) request.fields['conversationId'] = conversationId;
+        if (receiverId != null) request.fields['receiverId'] = receiverId;
+        if (replyToId != null) request.fields['replyToId'] = replyToId;
+        if (userId != null && userId.isNotEmpty) request.fields['userId'] = userId;
+        if (duration != null && duration >= 0) {
+          request.fields['duration'] = duration.toString();
+        }
+        if (amplitudes != null && amplitudes.isNotEmpty) {
+          request.fields['amplitudes'] = jsonEncode(
+            amplitudes
+                .map((v) => double.parse(v.clamp(0.0, 1.0).toStringAsFixed(3)))
+                .toList(),
+          );
+        }
+
+        final multipartFile = await http.MultipartFile.fromPath('images', audioFile.path);
+        request.files.add(multipartFile);
+
+        final streamedResponse = await request.send().timeout(const Duration(seconds: 40));
+        final response = await http.Response.fromStream(streamedResponse);
+
+        lastErrorMessage = null;
+        lastErrorCode = null;
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          final decoded = jsonDecode(response.body);
+          if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+            return decoded['data'] as Map<String, dynamic>?;
+          }
+        } else {
+          try {
+            final decoded = jsonDecode(response.body);
+            if (decoded is Map<String, dynamic>) {
+              lastErrorMessage = decoded['message']?.toString();
+              lastErrorCode = decoded['code']?.toString();
+            }
+          } catch (_) {}
+        }
+        return null;
+      }
 
       if (imageFiles != null && imageFiles.isNotEmpty) {
         final request = http.MultipartRequest('POST', Uri.parse(ApiConfig.sendMessage));
@@ -135,6 +190,8 @@ class MessageService {
         if (receiverId != null) request.fields['receiverId'] = receiverId;
         if (replyToId != null) request.fields['replyToId'] = replyToId;
         if (userId != null && userId.isNotEmpty) request.fields['userId'] = userId;
+        if (mentionAll == true) request.fields['mentionAll'] = 'true';
+        if (mentions != null && mentions.isNotEmpty) request.fields['mentions'] = jsonEncode(mentions);
 
         for (final file in imageFiles) {
           if (await file.exists()) {
@@ -177,6 +234,9 @@ class MessageService {
       if (type != 'text') body['type'] = type;
       if (location != null) body['location'] = location;
       if (poll != null) body['poll'] = poll;
+      if (mentionAll == true) body['mentionAll'] = true;
+      if (mentions != null && mentions.isNotEmpty) body['mentions'] = mentions;
+      if (postId != null && postId.isNotEmpty) body['postId'] = postId;
 
       lastErrorMessage = null;
       lastErrorCode = null;
@@ -486,6 +546,166 @@ class MessageService {
       return null;
     } catch (e) {
       debugPrint('MessageService.votePoll error: $e');
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> muteConversation({
+    String? conversationId,
+    String? receiverId,
+    required int durationMinutes,
+  }) async {
+    try {
+      final headers = await _getHeaders();
+      final body = <String, dynamic>{
+        if (conversationId != null && conversationId.isNotEmpty) 'conversationId': conversationId,
+        if (receiverId != null && receiverId.isNotEmpty) 'receiverId': receiverId,
+        'duration': durationMinutes,
+      };
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.muteConversation),
+            headers: headers,
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+          return decoded;
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MessageService.muteConversation error: $e');
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> unmuteConversation({
+    String? conversationId,
+    String? receiverId,
+  }) async {
+    try {
+      final headers = await _getHeaders();
+      final body = <String, dynamic>{
+        if (conversationId != null && conversationId.isNotEmpty) 'conversationId': conversationId,
+        if (receiverId != null && receiverId.isNotEmpty) 'receiverId': receiverId,
+        'duration': 0,
+      };
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.unmuteConversation),
+            headers: headers,
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+          return decoded;
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MessageService.unmuteConversation error: $e');
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> getMuteStatus({
+    String? conversationId,
+    String? receiverId,
+  }) async {
+    try {
+      final headers = await _getHeaders();
+      final body = <String, dynamic>{
+        if (conversationId != null && conversationId.isNotEmpty) 'conversationId': conversationId,
+        if (receiverId != null && receiverId.isNotEmpty) 'receiverId': receiverId,
+      };
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.getMuteStatus),
+            headers: headers,
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+          return decoded;
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MessageService.getMuteStatus error: $e');
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> deleteConversation({
+    String? conversationId,
+    String? receiverId,
+  }) async {
+    try {
+      final headers = await _getHeaders();
+      final body = <String, dynamic>{
+        if (conversationId != null && conversationId.isNotEmpty) 'conversationId': conversationId,
+        if (receiverId != null && receiverId.isNotEmpty) 'receiverId': receiverId,
+      };
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.deleteConversation),
+            headers: headers,
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+          return decoded;
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MessageService.deleteConversation error: $e');
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> updateQuickEmoji({
+    String? conversationId,
+    String? receiverId,
+    required String emoji,
+  }) async {
+    try {
+      final headers = await _getHeaders();
+      final body = <String, dynamic>{
+        'emoji': emoji,
+        if (conversationId != null && conversationId.isNotEmpty) 'conversationId': conversationId,
+        if (receiverId != null && receiverId.isNotEmpty) 'receiverId': receiverId,
+      };
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.updateQuickEmoji),
+            headers: headers,
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+          return decoded;
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MessageService.updateQuickEmoji error: $e');
       return null;
     }
   }

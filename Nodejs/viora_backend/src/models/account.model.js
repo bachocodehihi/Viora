@@ -18,6 +18,11 @@ const accountSchema = new mongoose.Schema({
   job: { type: String, default: '' },
   nationality: { type: String, default: '' },
   hobby: { type: String, default: '' },
+  relationship: { 
+    type: String, 
+    enum: ['single', 'dating', 'engaged', 'married', 'complicated', 'exploring', 'none', ''], 
+    default: '' 
+  },
   qrCode: { type: String, default: '' },
 
   nationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Nation', default: null },
@@ -68,6 +73,7 @@ const accountSchema = new mongoose.Schema({
     showNationality: { type: String, enum: ['public', 'friends', 'private'], default: 'public' },
     showHobby: { type: String, enum: ['public', 'friends', 'private'], default: 'public' },
     showPlacesLived: { type: String, enum: ['public', 'friends', 'private'], default: 'public' },
+    showRelationship: { type: String, enum: ['public', 'friends', 'private'], default: 'public' },
     //showSchool: { type: String, enum: ['public', 'friends', 'private'], default: 'public' },
   },
 

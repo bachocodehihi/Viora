@@ -1,6 +1,7 @@
 import '../../l10n/language.dart';
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -11,10 +12,14 @@ import '../../config/theme_helper.dart';
 import '../post/post_image_viewer_screen.dart';
 import '../../services/call_service.dart';
 import '../../services/message_service.dart';
+import '../../services/post_service.dart';
 import '../../services/profile_service.dart';
 import '../../widgets/app_avatar.dart';
 import '../../widgets/reaction/fb_reaction_box.dart';
 import '../../widgets/toast/app_toast.dart';
+import 'package:record/record.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
 import 'chat_info_screen.dart';
 import 'share_location_screen.dart';
 import '../message/messages_screen.dart';
@@ -29,6 +34,8 @@ import 'widgets/chat_image_bubble.dart';
 import 'widgets/chat_call_bubble.dart';
 import 'widgets/chat_message_context_menu.dart';
 import 'widgets/chat_mention_helper.dart';
+import 'widgets/chat_shared_post_bubble.dart';
+import 'widgets/chat_audio_bubble.dart';
 
 class ChatDetailScreen extends StatefulWidget {
   final String name;
@@ -73,12 +80,14 @@ class ChatDetailScreen extends StatefulWidget {
 class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final ChatMentionTextEditingController _messageController = ChatMentionTextEditingController();
   bool _showMentionList = false;
-  String _mentionQuery = '';
   List<Map<String, dynamic>> _mentionSuggestions = [];
+  final List<Map<String, dynamic>> _selectedMentions = [];
   final ScrollController _scrollController = ScrollController();
   final FocusNode _focusNode = FocusNode();
   late List<Map<String, dynamic>> _messages;
   final bool _isTyping = false;
+  bool _isAiTyping = false;
+  Timer? _aiTypingTimeout;
   Map<String, dynamic>? _replyingTo;
   List<Map<String, dynamic>> _pinnedMessages = [];
   bool _isPinnedExpanded = false;
@@ -102,13 +111,84 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     if (createdAt.isNotEmpty) return 'loc:${createdAt}_${isMe}_$text';
     return 'idx:$index:$text';
   }
+
+  GlobalKey? _resolveMessageGlobalKey(
+    List<Map<String, dynamic>> displayMsgs,
+    Map<String, dynamic> msg,
+    int msgIndex,
+  ) {
+    final String? msgId = (msg['id'] ?? msg['_id'])?.toString();
+    final String? tempId = msg['tempId']?.toString();
+
+    if (msgId != null && msgId.isNotEmpty) {
+      final bool isFirstWithId = displayMsgs.indexWhere(
+            (m) => (m['id'] ?? m['_id'])?.toString() == msgId,
+          ) ==
+          msgIndex;
+      if (!isFirstWithId) return null;
+
+      final existing = _messageKeys[msgId];
+      if (existing != null) return existing;
+
+      if (tempId != null && tempId.isNotEmpty && tempId != msgId) {
+        final transferred = _messageKeys.remove(tempId);
+        if (transferred != null) {
+          _messageKeys[msgId] = transferred;
+          return transferred;
+        }
+      }
+      return _messageKeys.putIfAbsent(msgId, () => GlobalKey());
+    }
+
+    if (tempId != null && tempId.isNotEmpty) {
+      final bool isFirstWithTemp = displayMsgs.indexWhere(
+            (m) => m['tempId']?.toString() == tempId,
+          ) ==
+          msgIndex;
+      if (!isFirstWithTemp) return null;
+      return _messageKeys.putIfAbsent(tempId, () => GlobalKey());
+    }
+
+    return null;
+  }
+
+  void _pruneMessageKeys(List<Map<String, dynamic>> msgs) {
+    final activeIds = <String>{};
+    for (final m in msgs) {
+      final id = (m['id'] ?? m['_id'])?.toString();
+      final tid = m['tempId']?.toString();
+      if (id != null && id.isNotEmpty) activeIds.add(id);
+      if (tid != null && tid.isNotEmpty) activeIds.add(tid);
+    }
+    _messageKeys.removeWhere((k, _) => !activeIds.contains(k));
+  }
   String? _activeConversationId;
   bool? _serverIsGroup;
+  bool _isMuted = false;
+  DateTime? _mutedUntil;
   bool _isBlocked = false;
   bool _isBlockedPromptShown = false;
   bool _isStartingCall = false;
   String? _otherUserId;
   String? _otherUserWhoCanMessage;
+  String _quickEmoji = '👍';
+  Function(Map<String, dynamic>)? _socketQuickEmojiUpdatedCb;
+  bool _isVoiceRecording = false;
+  bool _isRecordingPaused = false;
+  bool _isHoldMode = false;
+  bool _isVoicePointerDown = false;
+  bool _isStartingVoiceRecording = false;
+  int _recordingDuration = 0;
+  Timer? _recordingTimer;
+  Timer? _holdDetectTimer;
+  double _pointerStartX = 0;
+  List<double> _recordingAmplitudes = List.filled(24, 0.0, growable: true);
+  final List<double> _fullRecordingAmplitudes = [];
+  double _noiseFloorDb = -46.0;
+  int _ampSampleCount = 0;
+  AudioRecorder? _audioRecorder;
+  Timer? _waveTicker;
+  String? _currentRecordingPath;
   bool? _otherUserIsFriend;
   bool? _otherUserOnline;
   bool? _otherUserShowActiveStatus;
@@ -125,6 +205,47 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   Function(String)? _socketUserOnlineCb;
   Function(String)? _socketUserOfflineCb;
   Function(Map<String, dynamic>)? _socketActiveStatusChangedCb;
+  Function(Map<String, dynamic>)? _socketUserTypingCb;
+
+  bool _isAiMessage(Map<String, dynamic>? msg) {
+    if (msg == null) return false;
+    return msg['isAi'] == true || msg['senderId']?.toString() == 'viora_ai';
+  }
+
+  Widget _buildAiAvatar({double size = 28, double iconSize = 15}) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF3B82F6), Color(0xFF8B5CF6)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(Icons.auto_awesome_rounded, color: Colors.white, size: iconSize),
+    );
+  }
+
+  void _setAiTyping(bool typing) {
+    _aiTypingTimeout?.cancel();
+    if (typing) {
+      _aiTypingTimeout = Timer(const Duration(seconds: 25), () {
+        if (mounted && _isAiTyping) {
+          setState(() {
+            _isAiTyping = false;
+          });
+        }
+      });
+    }
+    if (mounted && _isAiTyping != typing) {
+      setState(() {
+        _isAiTyping = typing;
+      });
+    }
+  }
+  Function(Map<String, dynamic>)? _socketConversationMuteCb;
   StreamSubscription<String?>? _callLogSyncSub;
 
   Language get l10n => context.l10n;
@@ -299,6 +420,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   @override
   void initState() {
     super.initState();
+    _audioRecorder = AudioRecorder();
     _messageController.addListener(_onInputChangedForMentions);
     _scrollController.addListener(_onMessagesScroll);
     _activeConversationId = widget.conversationId;
@@ -334,7 +456,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         if (mounted) setState(() {});
       },
       onScrollToBottom: ({bool animated = false}) => _scrollToBottom(animated: animated),
-      onClearMessageKeys: () => _messageKeys.clear(),
+      onClearMessageKeys: () => _pruneMessageKeys(_messages),
     );
 
     if (_currentUserId == null) {
@@ -519,24 +641,42 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               (m['text'] == newMsgData['text'] || m['tempId'] != null),
         );
         if (optIdx != -1) {
+          final existingOpt = _messages[optIdx];
+          final serverAmps = newMsgData['amplitudes'];
+          final bool hasServerAmps = serverAmps is List && serverAmps.isNotEmpty;
           setState(() {
             _messages[optIdx] = {
-              ..._messages[optIdx],
+              ...existingOpt,
               ...newMsgData,
               'id': msgId,
               'isMe': true,
               'isUploading': false,
+              if (!hasServerAmps && existingOpt['amplitudes'] != null)
+                'amplitudes': existingOpt['amplitudes'],
+              if ((newMsgData['duration'] == null || newMsgData['duration'] == 0) &&
+                  existingOpt['duration'] != null)
+                'duration': existingOpt['duration'],
             };
           });
           return;
         }
       }
 
+      final bool isIncomingAi = newMsgData['isAi'] == true || senderId == 'viora_ai';
+      if (isIncomingAi) {
+        _setAiTyping(false);
+      }
+
       final bool shouldAutoScroll =
-          isMe || !_scrollController.hasClients || _scrollController.offset < 200;
+          isMe || isIncomingAi || !_scrollController.hasClients || _scrollController.offset < 200;
       setState(() {
         final incoming = Map<String, dynamic>.from(newMsgData);
         incoming['isMe'] = isMe;
+        if (isIncomingAi) {
+          incoming['isAi'] = true;
+          incoming['senderId'] = 'viora_ai';
+          incoming['senderName'] = 'VioraAI';
+        }
         _messages.add(incoming);
       });
       if (shouldAutoScroll) {
@@ -590,6 +730,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       });
     };
     SocketService.onCallMessageUpdated(_socketCallMessageUpdatedCb!);
+
+    _socketQuickEmojiUpdatedCb = (data) {
+      if (!mounted) return;
+      final convId = data['conversationId']?.toString();
+      final activeId = _activeConversationId ?? widget.conversationId;
+      if (convId != null && convId == activeId) {
+        final newEmoji = data['quickEmoji']?.toString();
+        if (newEmoji != null && newEmoji.isNotEmpty) {
+          setState(() {
+            _quickEmoji = newEmoji;
+          });
+        }
+      }
+    };
+    SocketService.onQuickEmojiUpdated(_socketQuickEmojiUpdatedCb!);
 
     SocketService.onMessagesRead((data) async {
       if (!mounted) return;
@@ -814,6 +969,36 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       });
     };
     SocketService.onUserActiveStatusChanged(_socketActiveStatusChangedCb!);
+
+    _socketConversationMuteCb = (data) {
+      if (!mounted) return;
+      final convId = data['conversationId']?.toString();
+      final currentConvId = _activeConversationId ?? widget.conversationId;
+      if (convId != null && currentConvId != null && convId == currentConvId) {
+        setState(() {
+          _isMuted = data['isMuted'] == true;
+          if (data['mutedUntil'] != null) {
+            _mutedUntil = DateTime.tryParse(data['mutedUntil'].toString());
+          } else {
+            _mutedUntil = null;
+          }
+        });
+      }
+    };
+    SocketService.onConversationMuteUpdated(_socketConversationMuteCb!);
+
+    _socketUserTypingCb = (data) {
+      if (!mounted) return;
+      final convId = data['conversationId']?.toString();
+      final activeId = _activeConversationId ?? widget.conversationId;
+      if (activeId != null && convId != null && convId != activeId) return;
+
+      final typingUserId = data['userId']?.toString();
+      if (data['isAi'] == true || typingUserId == 'viora_ai') {
+        _setAiTyping(data['isTyping'] == true);
+      }
+    };
+    SocketService.onUserTyping(_socketUserTypingCb!);
   }
 
   void _handlePollUpdated(Map<String, dynamic> data) {
@@ -871,10 +1056,39 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         } else if (res['isGroup'] != null) {
           _serverIsGroup = res['isGroup'] == true;
         }
+        if (res['isMuted'] != null) {
+          _isMuted = res['isMuted'] == true;
+        }
+        if (res['mutedUntil'] != null) {
+          _mutedUntil = DateTime.tryParse(res['mutedUntil'].toString());
+        }
+        if (res['quickEmoji'] != null && res['quickEmoji'].toString().trim().isNotEmpty) {
+          _quickEmoji = res['quickEmoji'].toString().trim();
+        }
         if (res['data'] is List) {
           final serverMsgs = List<Map<String, dynamic>>.from(res['data']);
           for (int i = 0; i < serverMsgs.length; i++) {
             final sMsg = serverMsgs[i];
+            if (sMsg['type'] == 'audio') {
+              final sId = (sMsg['id'] ?? sMsg['_id'])?.toString();
+              final localIdx = _messages.indexWhere((m) => (m['id'] ?? m['_id'])?.toString() == sId);
+              if (localIdx != -1) {
+                final localMsg = _messages[localIdx];
+                final sAmps = sMsg['amplitudes'];
+                if ((sAmps == null || (sAmps is List && sAmps.isEmpty)) &&
+                    localMsg['amplitudes'] is List &&
+                    (localMsg['amplitudes'] as List).isNotEmpty) {
+                  serverMsgs[i]['amplitudes'] = localMsg['amplitudes'];
+                }
+                if ((sMsg['filePath'] == null || sMsg['filePath'].toString().isEmpty) &&
+                    localMsg['filePath'] != null) {
+                  serverMsgs[i]['filePath'] = localMsg['filePath'];
+                }
+                if (localMsg['tempId'] != null && sMsg['tempId'] == null) {
+                  serverMsgs[i]['tempId'] = localMsg['tempId'];
+                }
+              }
+            }
             if (sMsg['type'] == 'poll') {
               final sId = (sMsg['id'] ?? sMsg['_id'])?.toString();
               final localIdx = _messages.indexWhere((m) => (m['id'] ?? m['_id'])?.toString() == sId);
@@ -899,7 +1113,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
           if (_messages.isEmpty) {
             _messages = serverMsgs;
-            _messageKeys.clear();
+            _pruneMessageKeys(_messages);
             _hasMoreOlderMessages = res['hasMore'] == true;
             isContentChanged = true;
           } else {
@@ -1006,11 +1220,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     break;
                   }
                 }
+                if (sMsg['type'] == 'audio' || mMsg['type'] == 'audio') {
+                  final sAttLen = (sMsg['attachments'] as List?)?.length ?? 0;
+                  final mAttLen = (mMsg['attachments'] as List?)?.length ?? 0;
+                  final sAmpsLen = (sMsg['amplitudes'] as List?)?.length ?? 0;
+                  final mAmpsLen = (mMsg['amplitudes'] as List?)?.length ?? 0;
+                  if (sAttLen != mAttLen || sAmpsLen != mAmpsLen) {
+                    isContentChanged = true;
+                    break;
+                  }
+                }
               }
             }
             if (isContentChanged) {
               _messages = nextMessages;
-              _messageKeys.clear();
+              _pruneMessageKeys(_messages);
             }
           }
         }
@@ -1146,12 +1370,26 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     if (_socketActiveStatusChangedCb != null) {
       SocketService.offUserActiveStatusChanged(_socketActiveStatusChangedCb!);
     }
+    if (_socketConversationMuteCb != null) {
+      SocketService.offConversationMuteUpdated(_socketConversationMuteCb!);
+    }
+    if (_socketQuickEmojiUpdatedCb != null) {
+      SocketService.offQuickEmojiUpdated(_socketQuickEmojiUpdatedCb!);
+    }
+    if (_socketUserTypingCb != null) {
+      SocketService.offUserTyping(_socketUserTypingCb!);
+    }
+    _aiTypingTimeout?.cancel();
     SocketService.offMessageReaction();
     SocketService.offLocationEvents();
     SocketService.offPollUpdated(_handlePollUpdated);
     SocketService.offMessagePinned(_handleMessagePinned);
     SocketService.offMessageUnpinned(_handleMessageUnpinned);
     _callLogSyncSub?.cancel();
+    _recordingTimer?.cancel();
+    _holdDetectTimer?.cancel();
+    _waveTicker?.cancel();
+    _audioRecorder?.dispose();
     _messageController.removeListener(_onInputChangedForMentions);
     _scrollController.removeListener(_onMessagesScroll);
     _messageController.dispose();
@@ -1172,7 +1410,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'type': msg['type'],
         if (msg['call'] != null) 'call': msg['call'],
         'isMe': isMe,
-        'name': isMe ? l10n.yourself : widget.name,
+        'name': isMe
+            ? l10n.yourself
+            : (_isAiMessage(msg)
+                ? 'VioraAI'
+                : ((_isGroup ? msg['senderName']?.toString() : null) ?? widget.name)),
       };
     });
     _focusNode.requestFocus();
@@ -1211,9 +1453,91 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     });
   }
 
+  void _sendQuickEmoji() async {
+    if (_isBlocked) return;
+    final emoji = _quickEmoji.trim().isNotEmpty ? _quickEmoji : 'like';
+    final now = DateTime.now();
+    final hour12 = now.hour % 12 == 0 ? 12 : now.hour % 12;
+    final timeString = "$hour12:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}";
+
+    final bool isRecipientOnlyFriendsPreCheck = !_isGroup &&
+        _otherUserWhoCanMessage == 'friends' &&
+        !_effectiveIsFriend;
+
+    final replyData = _replyingTo;
+    final String? replyToId = replyData?['id']?.toString();
+
+    late final Map<String, dynamic> newMsg;
+    setState(() {
+      _replyingTo = null;
+      newMsg = <String, dynamic>{
+        'text': emoji,
+        'type': 'emoji',
+        'isMe': true,
+        'time': timeString,
+        'createdAt': now.toIso8601String(),
+        'seenBy': [],
+        'recipientOnlyFriends': isRecipientOnlyFriendsPreCheck,
+      };
+      if (replyData != null) {
+        newMsg['replyTo'] = replyData;
+      }
+      _messages.add(newMsg);
+    });
+
+    _scrollToBottom();
+
+    final currentConvId = _activeConversationId ?? widget.conversationId;
+    final effectiveReceiverId = widget.receiverId ?? (!_isGroup ? widget.name : null);
+
+    if (currentConvId != null || effectiveReceiverId != null) {
+      final res = await MessageService.sendMessage(
+        content: emoji,
+        type: 'emoji',
+        conversationId: currentConvId,
+        receiverId: currentConvId != null ? null : effectiveReceiverId,
+        replyToId: replyToId,
+      );
+      if (res != null && mounted) {
+        setState(() {
+          final returnedConvId = res['conversationId'] ?? res['data']?['conversationId'];
+          if (res['id'] != null) {
+            newMsg['id'] = res['id'];
+          } else if (res['data']?['id'] != null) {
+            newMsg['id'] = res['data']['id'];
+          }
+          if (returnedConvId != null && _activeConversationId == null) {
+            _activeConversationId = returnedConvId.toString();
+            SocketService.joinConversation(_activeConversationId!);
+          }
+        });
+      }
+    }
+  }
+
   void _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
+
+    bool mentionAll = false;
+    bool mentionAi = RegExp(r'(?:^|[^\w.])@Viora\s*AI\b', caseSensitive: false).hasMatch(text);
+    final List<String> mentionedUserIds = [];
+    for (final m in _selectedMentions) {
+      final tag = m['tag']?.toString() ?? '';
+      if (tag.isNotEmpty && text.contains(tag)) {
+        if (m['isAll'] == true) {
+          mentionAll = true;
+        } else if (m['isAi'] == true || m['id']?.toString() == 'viora_ai') {
+          mentionAi = true;
+        } else {
+          final uid = m['id']?.toString() ?? '';
+          if (uid.isNotEmpty && !mentionedUserIds.contains(uid)) {
+            mentionedUserIds.add(uid);
+          }
+        }
+      }
+    }
+    _selectedMentions.clear();
 
     final replyData = _replyingTo;
     final String? replyToId = replyData?['id']?.toString();
@@ -1221,7 +1545,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     if (_showMentionList) {
       setState(() {
         _showMentionList = false;
-        _mentionQuery = '';
         _mentionSuggestions = [];
       });
     }
@@ -1256,13 +1579,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final effectiveReceiverId = widget.receiverId ?? (!_isGroup ? widget.name : null);
 
     if (currentConvId != null || effectiveReceiverId != null) {
+      if (mentionAi && !isRecipientOnlyFriendsPreCheck) {
+        _setAiTyping(true);
+      }
       final res = await MessageService.sendMessage(
         content: text,
         conversationId: currentConvId,
         receiverId: currentConvId != null ? null : effectiveReceiverId,
         replyToId: replyToId,
+        mentionAll: mentionAll,
+        mentions: mentionedUserIds.isNotEmpty ? mentionedUserIds : null,
       );
       if (res != null && mounted) {
+        final bool isRoFRes = res['data']?['recipientOnlyFriends'] == true || res['recipientOnlyFriends'] == true;
+        if (isRoFRes && mentionAi) {
+          _setAiTyping(false);
+        }
         setState(() {
           final returnedConvId = res['conversationId'] ?? res['data']?['conversationId'];
           if (res['id'] != null) {
@@ -1280,8 +1612,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           } else if (res['data']?['time'] != null) {
             newMsg['time'] = res['data']['time'];
           }
-          final bool isRoF = res['data']?['recipientOnlyFriends'] == true || res['recipientOnlyFriends'] == true;
-          if (isRoF) {
+          if (isRoFRes) {
             newMsg['recipientOnlyFriends'] = true;
           } else if (res['data'] != null && res['data']['recipientOnlyFriends'] == false) {
             newMsg['recipientOnlyFriends'] = false;
@@ -1293,6 +1624,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         });
         MessagesScreen.triggerRefresh();
       } else if (mounted) {
+        if (mentionAi) _setAiTyping(false);
         setState(() {
           _messages.remove(newMsg);
         });
@@ -1438,7 +1770,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   Future<void> _openChatInfo() async {
     FocusScope.of(context).unfocus();
     final currentConvId = _activeConversationId ?? widget.conversationId;
-    await Navigator.push(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ChatInfoScreen(
@@ -1452,9 +1784,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           pinnedMessages: _pinnedMessages,
           isGroup: _isGroup,
           isOnline: _canShowActiveStatus ? _effectiveIsOnline : null,
+          isMuted: _isMuted,
+          quickEmoji: _quickEmoji,
         ),
       ),
     );
+    if (result is String && result.isNotEmpty && mounted) {
+      setState(() {
+        _quickEmoji = result;
+      });
+    }
     if (mounted) {
       _loadConversationData();
     }
@@ -1574,8 +1913,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 builder: (context) {
                   final displayMsgs = _displayMessages;
                   final seenMap = _computeSeenAvatarsMap(displayMsgs);
+                  final bool showTypingRow = _isTyping || _isAiTyping;
                   final int itemCount =
-                      displayMsgs.length + (_isTyping ? 1 : 0) + (_isLoadingOlderMessages ? 1 : 0);
+                      displayMsgs.length + (showTypingRow ? 1 : 0) + (_isLoadingOlderMessages ? 1 : 0);
                   return NotificationListener<ScrollNotification>(
                     onNotification: (notification) {
                       if (_isLoadingOlderMessages || !_hasMoreOlderMessages) {
@@ -1606,10 +1946,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       ),
                       itemCount: itemCount,
                       itemBuilder: (context, index) {
-                        if (_isTyping && index == 0) {
-                          return _buildTypingIndicator();
+                        if (showTypingRow && index == 0) {
+                          return _isAiTyping ? _buildAiTypingIndicator() : _buildTypingIndicator();
                         }
-                        final int adjustedIdx = _isTyping ? index - 1 : index;
+                        final int adjustedIdx = showTypingRow ? index - 1 : index;
                         if (_isLoadingOlderMessages && adjustedIdx >= displayMsgs.length) {
                           return Padding(
                             padding: EdgeInsets.symmetric(vertical: 12.h),
@@ -1627,14 +1967,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                         }
                         final int msgIndex = displayMsgs.length - 1 - adjustedIdx;
                         final msg = displayMsgs[msgIndex];
-                        final String? msgId = (msg['id'] ?? msg['_id'])?.toString();
-                        final bool isFirstWithId = msgId != null &&
-                            msgId.isNotEmpty &&
-                            !msgId.startsWith('temp_') &&
-                            displayMsgs.indexWhere((m) => (m['id'] ?? m['_id'])?.toString() == msgId) == msgIndex;
-                        final GlobalKey? itemKey = isFirstWithId
-                            ? _messageKeys.putIfAbsent(msgId, () => GlobalKey())
-                            : null;
+                        final GlobalKey? itemKey = _resolveMessageGlobalKey(
+                          displayMsgs,
+                          msg,
+                          msgIndex,
+                        );
 
                         return _buildMessageItem(
                           key: itemKey,
@@ -1922,7 +2259,121 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     return double.tryParse(val.toString());
   }
 
+  bool _isSharedPost(Map<String, dynamic>? msg, String text) {
+    if (msg != null && msg['postId'] != null && msg['postId'].toString().trim().isNotEmpty) {
+      return true;
+    }
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
+    return trimmed.startsWith('Shared post of ') ||
+        trimmed.startsWith('Đã chia sẻ bài viết của ') ||
+        trimmed.startsWith('Shared post') ||
+        trimmed.contains('viora.app/post/');
+  }
 
+  Map<String, String>? _parseSharedPostText(String text) {
+    final clean = text.trim();
+    final regWithColon = RegExp(
+      r'^(?:Shared post of|Đã chia sẻ bài viết của)\s+([^:\n]+):\s*\n*([\s\S]*)',
+      caseSensitive: false,
+    );
+    final match = regWithColon.firstMatch(clean);
+    if (match != null) {
+      String rawContent = (match.group(2) ?? '').trim();
+      if (rawContent.startsWith('"') && rawContent.endsWith('"') && rawContent.length >= 2) {
+        rawContent = rawContent.substring(1, rawContent.length - 1).trim();
+      } else if (rawContent.startsWith('“') && rawContent.endsWith('”') && rawContent.length >= 2) {
+        rawContent = rawContent.substring(1, rawContent.length - 1).trim();
+      }
+      return {
+        'author': (match.group(1) ?? '').trim(),
+        'content': rawContent,
+      };
+    }
+
+    final regAuthor = RegExp(
+      r'^(?:Shared post of|Đã chia sẻ bài viết của)\s+([^\n]+)',
+      caseSensitive: false,
+    );
+    final matchAuthor = regAuthor.firstMatch(clean);
+    if (matchAuthor != null) {
+      return {
+        'author': (matchAuthor.group(1) ?? '').trim(),
+        'content': '',
+      };
+    }
+    return null;
+  }
+
+  bool _isOpeningSharedPost = false;
+
+  Future<void> _openSharedPost(Map<String, dynamic>? msg, String text) async {
+    if (_isOpeningSharedPost) return;
+    _isOpeningSharedPost = true;
+    HapticFeedback.lightImpact();
+
+    try {
+      String postId = (msg?['postId'] ?? '').toString().trim();
+      if (postId.isEmpty || postId == 'null') {
+        final sharedMap = (msg != null && msg['sharedPost'] is Map)
+            ? (msg['sharedPost'] as Map)
+            : null;
+        if (sharedMap != null) {
+          postId = (sharedMap['id'] ?? sharedMap['_id'] ?? '').toString().trim();
+        }
+      }
+      Map<String, dynamic>? postData;
+
+      if (postId.isNotEmpty && postId != 'null') {
+        postData = await PostService.getPost(postId);
+      }
+
+      if (postData == null && msg != null && msg['post'] is Map) {
+        postData = Map<String, dynamic>.from(msg['post'] as Map);
+      }
+
+      if (postData == null) {
+        final parsed = _parseSharedPostText(text);
+        postData = await PostService.findPost(
+          content: parsed?['content'] ?? text,
+          authorName: parsed?['author'],
+          postId: postId.isNotEmpty && postId != 'null' ? postId : null,
+        );
+      }
+
+      if (!mounted) return;
+
+      if (postData != null) {
+        Navigator.pushNamed(
+          context,
+          AppRoutes.postDetail,
+          arguments: {
+            'post': postData,
+          },
+        );
+      } else {
+        AppToast.info(context, l10n.postNotFound);
+      }
+    } catch (e) {
+      debugPrint('_openSharedPost error: $e');
+    } finally {
+      _isOpeningSharedPost = false;
+    }
+  }
+
+  bool _isSingleEmoji(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
+    if (ChatInfoScreen.getReactionAsset(trimmed) != null) return true;
+    final runes = trimmed.runes.toList();
+    if (runes.isEmpty || runes.length > 8) return false;
+    for (final r in runes) {
+      if (r >= 0x20 && r <= 0x7E) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   Widget _buildBubbleWidget({
     required String text,
@@ -1970,25 +2421,48 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final String locName = (location?['name'] ?? text).toString();
     final String locAddress = (location?['address'] ?? '').toString();
 
-    final List<String> imageList = [];
     final rawAttachments = msg?['attachments'];
-    if (rawAttachments is List) {
-      for (var a in rawAttachments) {
-        if (a != null && a.toString().trim().isNotEmpty) {
-          imageList.add(a.toString().trim());
+    final bool hasAudioAttachment = (rawAttachments is List &&
+            rawAttachments.any((a) {
+              final s = a.toString().toLowerCase();
+              return s.endsWith('.m4a') ||
+                  s.endsWith('.aac') ||
+                  s.endsWith('.mp3') ||
+                  s.endsWith('.wav') ||
+                  s.contains('.m4a?') ||
+                  s.contains('/video/upload/');
+            })) ||
+        (msg?['filePath'] != null &&
+            msg!['filePath'].toString().endsWith('.m4a'));
+
+    final bool isAudio = !isRecalled && (type == 'audio' || hasAudioAttachment);
+
+    final List<String> imageList = [];
+    if (!isAudio) {
+      if (rawAttachments is List) {
+        for (var a in rawAttachments) {
+          if (a != null && a.toString().trim().isNotEmpty) {
+            imageList.add(a.toString().trim());
+          }
+        }
+      }
+      if (imageList.isEmpty) {
+        final img = msg?['imageUrl'] ?? (type == 'image' && text.startsWith('http') ? text : null);
+        if (img != null && img.toString().trim().isNotEmpty) {
+          imageList.add(img.toString().trim());
         }
       }
     }
-    if (imageList.isEmpty) {
-      final img = msg?['imageUrl'] ?? (type == 'image' && text.startsWith('http') ? text : null);
-      if (img != null && img.toString().trim().isNotEmpty) {
-        imageList.add(img.toString().trim());
-      }
-    }
-    final bool isImage = !isRecalled && (type == 'image' || imageList.isNotEmpty);
+    final bool isImage = !isRecalled && !isAudio && (type == 'image' || imageList.isNotEmpty);
     final bool isPoll = !isRecalled && (type == 'poll' || msg?['poll'] != null);
     final bool isCall = !isRecalled && (type == 'call' || msg?['call'] != null);
-    final bool isSpecialBubble = isLocation || isImage || isPoll || isCall;
+    final bool isShared = !isRecalled && _isSharedPost(msg, text);
+    final bool isSpecialBubble = isLocation || isImage || isPoll || isCall || isShared || isAudio;
+    final String? reactionAsset = ChatInfoScreen.getReactionAsset(text);
+    final bool isSingleEmojiText = _isSingleEmoji(text);
+    final bool isAiBubble = _isAiMessage(msg);
+    final bool isStandaloneEmoji = !isRecalled &&
+        (type == 'emoji' || reactionAsset != null || isSingleEmojiText);
 
     final messageBubble = Stack(
       clipBehavior: Clip.none,
@@ -1998,48 +2472,84 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           constraints: BoxConstraints(
             maxWidth: isPoll
                 ? 280.w
-                : (isCall ? 240.w : (isSpecialBubble ? 250.w : 0.72.sw)),
+                : (isCall ? 240.w : (isShared ? 265.w : (isAudio ? 255.w : (isSpecialBubble ? 250.w : 0.72.sw)))),
           ),
-          padding: isSpecialBubble
-              ? EdgeInsets.zero
-              : EdgeInsets.only(
-                  left: 14.w,
-                  right: 14.w,
-                  top: 10.h,
-                  bottom: reactionObj != null ? 14.h : 10.h,
+          padding: isStandaloneEmoji
+              ? EdgeInsets.symmetric(horizontal: 4.w, vertical: reactionObj != null ? 6.h : 2.h)
+              : (isSpecialBubble
+                  ? EdgeInsets.zero
+                  : EdgeInsets.only(
+                      left: 14.w,
+                      right: 14.w,
+                      top: 10.h,
+                      bottom: reactionObj != null ? 14.h : 10.h,
+                    )),
+          decoration: isStandaloneEmoji
+              ? BoxDecoration(
+                  color: Colors.transparent,
+                  border: isHighlighted
+                      ? Border.all(color: Colors.amber.withValues(alpha: 0.7), width: 2)
+                      : null,
+                  boxShadow: isHighlighted
+                      ? [
+                          BoxShadow(
+                            color: Colors.amber.withValues(alpha: 0.45),
+                            blurRadius: 14,
+                            spreadRadius: 2,
+                          ),
+                        ]
+                      : const [],
+                )
+              : BoxDecoration(
+                  color: isPoll || isShared
+                      ? (isShared && isMe
+                          ? (context.isDark ? const Color(0xFF1E2638) : const Color(0xFF2563EB))
+                          : context.cardBg)
+                      : (isMe
+                          ? AppColors.blue
+                          : (isAiBubble
+                              ? (context.isDark ? const Color(0xFF1E1D33) : const Color(0xFFF3F0FF))
+                              : context.cardBg)),
+                  borderRadius: isPoll || isShared
+                      ? BorderRadius.circular(18.r)
+                      : BorderRadius.only(
+                          topLeft: Radius.circular(18.r),
+                          topRight: Radius.circular(18.r),
+                          bottomLeft: Radius.circular(isMe ? 18.r : 4.r),
+                          bottomRight: Radius.circular(isMe ? 4.r : 18.r),
+                        ),
+                  border: isHighlighted
+                      ? Border.all(color: Colors.amber, width: 2)
+                      : (isAiBubble && !isSpecialBubble
+                          ? Border.all(
+                              color: const Color(0xFF8B5CF6).withValues(alpha: context.isDark ? 0.45 : 0.35),
+                              width: 1,
+                            )
+                          : ((isPoll || isShared)
+                              ? Border.all(
+                                  color: isMe
+                                      ? (context.isDark ? Colors.white.withValues(alpha: 0.12) : Colors.transparent)
+                                      : context.dividerTheme,
+                                  width: 0.8,
+                                )
+                              : (((isLocation || isCall) && !isMe)
+                                  ? Border.all(color: context.dividerTheme, width: 0.8)
+                                  : null))),
+                  boxShadow: [
+                    if (isHighlighted)
+                      BoxShadow(
+                        color: Colors.amber.withValues(alpha: 0.45),
+                        blurRadius: 14,
+                        spreadRadius: 2,
+                      )
+                    else
+                      BoxShadow(
+                        color: context.chatBubbleShadow,
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      )
+                  ],
                 ),
-          decoration: BoxDecoration(
-            color: isPoll ? context.cardBg : (isMe ? AppColors.blue : context.cardBg),
-            borderRadius: isPoll
-                ? BorderRadius.circular(16.r)
-                : BorderRadius.only(
-                    topLeft: Radius.circular(18.r),
-                    topRight: Radius.circular(18.r),
-                    bottomLeft: Radius.circular(isMe ? 18.r : 4.r),
-                    bottomRight: Radius.circular(isMe ? 4.r : 18.r),
-                  ),
-            border: isHighlighted
-                ? Border.all(color: Colors.amber, width: 2)
-                : (isPoll
-                    ? Border.all(color: context.dividerTheme, width: 0.8)
-                    : (((isLocation || isCall) && !isMe)
-                        ? Border.all(color: context.dividerTheme, width: 0.8)
-                        : null)),
-            boxShadow: [
-              if (isHighlighted)
-                BoxShadow(
-                  color: Colors.amber.withValues(alpha: 0.45),
-                  blurRadius: 14,
-                  spreadRadius: 2,
-                )
-              else
-                BoxShadow(
-                  color: context.chatBubbleShadow,
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                )
-            ],
-          ),
           clipBehavior: isSpecialBubble ? Clip.antiAlias : Clip.none,
           child: isPoll
               ? ChatPollBubble(
@@ -2099,41 +2609,120 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                                   )
                               : null,
                         )
-                                            : Column(
-                      crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ChatMessageText(
-                          text: text,
-                          isMe: isMe,
-                          isRecalled: isRecalled,
-                          memberNames: _availableMentionMembers.map((m) => (m['name'] ?? '').toString()).toList(),
-                        ),
-                        if (isPinned)
-                          Padding(
-                            padding: EdgeInsets.only(top: 4.h),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.push_pin_rounded,
-                                  size: 11.r,
-                                  color: isMe ? Colors.white70 : AppColors.blue,
+                      : isShared
+                          ? ChatSharedPostBubble(
+                              msg: msg ?? {},
+                              text: text,
+                              isMe: isMe,
+                              isPinned: isPinned,
+                              author: _parseSharedPostText(text)?['author'] ?? '',
+                              content: _parseSharedPostText(text)?['content'] ?? '',
+                              onTap: () => _openSharedPost(msg, text),
+                            )
+                          : isAudio
+                              ? ChatAudioBubble(
+                                  text: text,
+                                  durationSeconds: (msg?['duration'] is num && (msg!['duration'] as num) > 0)
+                                      ? (msg['duration'] as num).round()
+                                      : _parseAudioTextDuration(text),
+                                  isMe: isMe,
+                                  isPinned: isPinned,
+                                  filePath: msg?['filePath']?.toString(),
+                                  audioUrl: (msg?['attachments'] is List && (msg!['attachments'] as List).isNotEmpty)
+                                      ? msg!['attachments'][0]?.toString()
+                                      : (msg?['mediaUrl']?.toString() ?? (text.startsWith('http') ? text : null)),
+                                  amplitudes: msg?['amplitudes'] is List
+                                      ? (msg!['amplitudes'] as List)
+                                          .map((e) => (double.tryParse(e.toString()) ?? 0.0))
+                                          .toList()
+                                      : null,
+                                )
+                              : isStandaloneEmoji
+                              ? Column(
+                                  crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (reactionAsset != null)
+                                      Padding(
+                                        padding: EdgeInsets.symmetric(vertical: 2.h),
+                                        child: Image.asset(
+                                          reactionAsset,
+                                          width: 34.r,
+                                          height: 34.r,
+                                          fit: BoxFit.contain,
+                                        ),
+                                      )
+                                    else
+                                      Padding(
+                                        padding: EdgeInsets.symmetric(vertical: 2.h),
+                                        child: Text(
+                                          text,
+                                          style: TextStyle(
+                                            fontSize: 30.sp,
+                                            height: 1.1,
+                                          ),
+                                        ),
+                                      ),
+                                    if (isPinned)
+                                      Padding(
+                                        padding: EdgeInsets.only(top: 4.h),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.push_pin_rounded,
+                                              size: 11.r,
+                                              color: AppColors.blue,
+                                            ),
+                                            SizedBox(width: 3.w),
+                                            Text(
+                                              l10n.pinned,
+                                              style: TextStyle(
+                                                fontSize: 10.sp,
+                                                fontWeight: FontWeight.w600,
+                                                color: AppColors.blue,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                  ],
+                                )
+                              : Column(
+                                  crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    ChatMessageText(
+                                      text: text,
+                                      isMe: isMe,
+                                      isRecalled: isRecalled,
+                                      memberNames: _availableMentionMembers.map((m) => (m['name'] ?? '').toString()).toList(),
+                                    ),
+                                    if (isPinned)
+                                      Padding(
+                                        padding: EdgeInsets.only(top: 4.h),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.push_pin_rounded,
+                                              size: 11.r,
+                                              color: isMe ? Colors.white70 : AppColors.blue,
+                                            ),
+                                            SizedBox(width: 3.w),
+                                            Text(
+                                              l10n.pinned,
+                                              style: TextStyle(
+                                                fontSize: 10.sp,
+                                                fontWeight: FontWeight.w600,
+                                                color: isMe ? Colors.white70 : AppColors.blue,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                  ],
                                 ),
-                                SizedBox(width: 3.w),
-                                Text(
-                                  l10n.pinned,
-                                  style: TextStyle(
-                                    fontSize: 10.sp,
-                                    color: isMe ? Colors.white70 : AppColors.blue,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
         ),
 
         if (reactionObj != null)
@@ -2506,8 +3095,35 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
       );
     } else if (!isMe) {
-      final bool isLastOfOtherCluster =
-          index == msgs.length - 1 || msgs[index + 1]['isMe'] == true;
+      final bool isAiMsg = _isAiMessage(msg);
+      final Map<String, dynamic>? nextMsg =
+          index < msgs.length - 1 ? msgs[index + 1] : null;
+      final bool nextIsSameSender = nextMsg != null &&
+          nextMsg['isMe'] != true &&
+          _isAiMessage(nextMsg) == isAiMsg &&
+          (!_isGroup ||
+              (nextMsg['senderId']?.toString() ?? '') ==
+                  (msg['senderId']?.toString() ?? ''));
+      final bool isLastOfOtherCluster = nextMsg == null || !nextIsSameSender;
+
+      final Map<String, dynamic>? prevMsg = index > 0 ? msgs[index - 1] : null;
+      final bool prevIsSameSender = prevMsg != null &&
+          prevMsg['isMe'] != true &&
+          _isAiMessage(prevMsg) == isAiMsg &&
+          (!_isGroup ||
+              (prevMsg['senderId']?.toString() ?? '') ==
+                  (msg['senderId']?.toString() ?? ''));
+      final bool showSenderHeader = (isAiMsg || _isGroup) && !prevIsSameSender;
+      final String senderLabel = isAiMsg
+          ? 'VioraAI'
+          : ((msg['senderName']?.toString().trim().isNotEmpty == true)
+              ? msg['senderName'].toString()
+              : widget.name);
+      final bool isReplyTargetMe = replyTo != null &&
+          (replyTo['isMe'] == true ||
+              (_currentUserId != null &&
+                  _currentUserId!.isNotEmpty &&
+                  replyTo['senderId']?.toString() == _currentUserId));
 
       messageWidget = Align(
         key: showDateSeparator ? null : key,
@@ -2527,7 +3143,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       Icon(Icons.reply_rounded, size: 13.r, color: context.textMuted),
                       SizedBox(width: 4.w),
                       Text(
-                        '${widget.name} ${l10n.repliedTo} ${replyTo['isMe'] == true ? l10n.youLower : (replyTo['name'] ?? '')}',
+                        '$senderLabel ${l10n.repliedTo} ${isReplyTargetMe ? l10n.youLower : (replyTo['name'] ?? '')}',
                         style: TextStyle(
                           fontSize: 11.sp,
                           color: context.textMuted,
@@ -2544,17 +3160,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                   if (isLastOfOtherCluster)
                     Padding(
                       padding: EdgeInsets.only(bottom: 2.h),
-                      child: AppAvatar(
-                        avatar: _isGroup
-                            ? (msg['senderAvatar'] ?? msg['avatar'] ?? ((msg['senderName'] ?? '').toString().isNotEmpty ? (msg['senderName'] as String)[0].toUpperCase() : 'U'))
-                            : widget.avatar,
-                        name: _isGroup ? (msg['senderName'] ?? msg['name'] ?? l10n.groupMember) : widget.name,
-                        color: widget.color,
-                        radius: 14.r,
-                        fontSize: 11.sp,
-                        enableViewer: false,
-                        onTap: _openChatInfo,
-                      ),
+                      child: isAiMsg
+                          ? _buildAiAvatar(size: 28.r, iconSize: 15.r)
+                          : AppAvatar(
+                              avatar: _isGroup
+                                  ? (msg['senderAvatar'] ?? msg['avatar'] ?? ((msg['senderName'] ?? '').toString().isNotEmpty ? (msg['senderName'] as String)[0].toUpperCase() : 'U'))
+                                  : widget.avatar,
+                              name: _isGroup ? (msg['senderName'] ?? msg['name'] ?? l10n.groupMember) : widget.name,
+                              color: widget.color,
+                              radius: 14.r,
+                              fontSize: 11.sp,
+                              enableViewer: false,
+                              onTap: _openChatInfo,
+                            ),
                     )
                   else
                     SizedBox(width: 28.w),
@@ -2564,16 +3182,39 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (_isGroup && (msg['senderName'] != null && msg['senderName'].toString().isNotEmpty))
+                        if (showSenderHeader && senderLabel.isNotEmpty)
                           Padding(
                             padding: EdgeInsets.only(bottom: 3.h, left: 4.w),
-                            child: Text(
-                              msg['senderName'].toString(),
-                              style: TextStyle(
-                                fontSize: 11.5.sp,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.blue,
-                              ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  senderLabel,
+                                  style: TextStyle(
+                                    fontSize: 11.5.sp,
+                                    fontWeight: FontWeight.bold,
+                                    color: isAiMsg ? const Color(0xFF8B5CF6) : AppColors.blue,
+                                  ),
+                                ),
+                                if (isAiMsg) ...[
+                                  SizedBox(width: 5.w),
+                                  Container(
+                                    padding: EdgeInsets.symmetric(horizontal: 5.w, vertical: 1.h),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF8B5CF6).withValues(alpha: 0.16),
+                                      borderRadius: BorderRadius.circular(6.r),
+                                    ),
+                                    child: Text(
+                                      'AI',
+                                      style: TextStyle(
+                                        fontSize: 8.5.sp,
+                                        fontWeight: FontWeight.bold,
+                                        color: const Color(0xFF8B5CF6),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                           ),
                         Builder(
@@ -2583,6 +3224,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                               onReply: () => _triggerReply(msg, false),
                               child: GestureDetector(
                                 onTap: () {
+                                  if (_isSharedPost(msg, text) && !isRecalled) {
+                                    _openSharedPost(msg, text);
+                                    return;
+                                  }
                                   HapticFeedback.selectionClick();
                                   setState(() {
                                     if (_showTimestampKeys.contains(msgKey)) {
@@ -2688,6 +3333,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     onReply: () => _triggerReply(msg, true),
                     child: GestureDetector(
                       onTap: () {
+                        if (_isSharedPost(msg, text) && !isRecalled) {
+                          _openSharedPost(msg, text);
+                          return;
+                        }
                         HapticFeedback.selectionClick();
                         setState(() {
                           if (_showTimestampKeys.contains(msgKey)) {
@@ -2999,6 +3648,65 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     );
   }
 
+  Widget _buildAiTypingIndicator() {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12.0),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2.0),
+              child: _buildAiAvatar(size: 28.r, iconSize: 15.r),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+              decoration: BoxDecoration(
+                color: context.isDark ? const Color(0xFF1E1D33) : const Color(0xFFF3F0FF),
+                border: Border.all(
+                  color: const Color(0xFF8B5CF6).withValues(alpha: context.isDark ? 0.45 : 0.35),
+                  width: 1,
+                ),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(18.r),
+                  topRight: Radius.circular(18.r),
+                  bottomLeft: Radius.circular(4.r),
+                  bottomRight: Radius.circular(18.r),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'VioraAI ${l10n.aiTyping}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF8B5CF6),
+                      fontStyle: FontStyle.italic,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const SizedBox(
+                    width: 10,
+                    height: 10,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B5CF6)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildReplyBanner() {
     return Container(
       margin: EdgeInsets.only(bottom: 8.h),
@@ -3073,10 +3781,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       List<XFile> picked = [];
 
       try {
-        picked = await picker.pickMultiImage();
-      } catch (_) {}
-
-      if (picked.isEmpty) {
+        picked = await picker.pickMultiImage(
+          imageQuality: 85,
+        );
+      } catch (_) {
         final XFile? single = await picker.pickImage(
           source: ImageSource.gallery,
           imageQuality: 85,
@@ -3251,8 +3959,499 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
-  void _handleVoiceRecord() {
-    AppToast.info(context, l10n.voiceRecordingFeature);
+  String _formatRecordingDuration(int seconds) {
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  int _parseAudioTextDuration(String text) {
+    final parts = text.trim().split(':');
+    if (parts.length == 2) {
+      final m = int.tryParse(parts[0]);
+      final s = int.tryParse(parts[1]);
+      if (m != null && s != null && m >= 0 && s >= 0) {
+        return m * 60 + s;
+      }
+    }
+    return int.tryParse(text.replaceAll(RegExp(r'[^0-9]'), '')) ?? 2;
+  }
+
+  void _handleAmplitude(double currentDb) {
+    if (!mounted || !_isVoiceRecording || _isRecordingPaused) return;
+
+    double db = currentDb;
+    if (!db.isFinite) {
+      db = -160.0;
+    } else if (db > 1.0) {
+      db = 20.0 * math.log(db / 32768.0) / math.ln10;
+    } else if (db > 0.0) {
+      db = 20.0 * math.log(db) / math.ln10;
+    }
+
+    _ampSampleCount++;
+
+    // Calibrate ambient noise floor from initial quiet samples (e.g. room/fan hum)
+    // without absorbing speech or steady held tones.
+    if (_ampSampleCount <= 5) {
+      if (db > -80.0 && db < -21.5) {
+        _noiseFloorDb = _ampSampleCount == 1 ? db : (_noiseFloorDb * 0.5 + db * 0.5);
+      }
+    } else if (db > -80.0 && db < _noiseFloorDb) {
+      _noiseFloorDb = _noiseFloorDb * 0.9 + db * 0.1;
+    }
+
+    final double gateDb = (_noiseFloorDb + 4.5).clamp(-47.0, -19.5);
+    double norm = 0.0;
+    if (db > gateDb) {
+      final double span = (-2.0 - gateDb).clamp(12.0, 44.0);
+      final double ratio = ((db - gateDb) / span).clamp(0.0, 1.0);
+      norm = (0.14 + 0.86 * ratio).clamp(0.0, 1.0);
+    }
+
+    _fullRecordingAmplitudes.add(norm);
+
+    setState(() {
+      _recordingAmplitudes = [
+        ..._recordingAmplitudes.sublist(1),
+        norm,
+      ];
+    });
+  }
+
+  void _startVoiceRecording({bool isHold = false}) async {
+    if (_isBlocked || _isStartingVoiceRecording || _isVoiceRecording) return;
+    _isStartingVoiceRecording = true;
+    FocusScope.of(context).unfocus();
+
+    try {
+      // Request microphone permission explicitly if not already granted
+      var status = await Permission.microphone.status;
+      if (!status.isGranted) {
+        status = await Permission.microphone.request();
+      }
+      if (!status.isGranted) {
+        if (mounted) {
+          AppToast.error(
+            context,
+            LanguageManager.isEnglish()
+                ? 'Microphone permission required'
+                : 'Cần cấp quyền microphone để ghi âm',
+          );
+        }
+        return;
+      }
+
+      if (isHold && !_isVoicePointerDown) {
+        return;
+      }
+
+      _recordingTimer?.cancel();
+      _waveTicker?.cancel();
+
+      final tempDir = await getTemporaryDirectory();
+      final path = '${tempDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      _currentRecordingPath = path;
+
+      try {
+        if (_audioRecorder != null) {
+          if (await _audioRecorder!.isRecording() || await _audioRecorder!.isPaused()) {
+            await _audioRecorder!.stop();
+          }
+          await _audioRecorder!.dispose();
+        }
+      } catch (_) {}
+      _audioRecorder = AudioRecorder();
+
+      await _audioRecorder!.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+          numChannels: 1,
+          autoGain: true,
+          echoCancel: false,
+          noiseSuppress: false,
+          androidConfig: AndroidRecordConfig(
+            useLegacy: true,
+          ),
+        ),
+        path: path,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _isVoiceRecording = true;
+        _isRecordingPaused = false;
+        _isHoldMode = isHold;
+        _recordingDuration = 0;
+        _noiseFloorDb = -46.0;
+        _ampSampleCount = 0;
+        _fullRecordingAmplitudes.clear();
+        _recordingAmplitudes = List.filled(24, 0.0, growable: true);
+      });
+
+      // Dedicated ticker polling amplitude directly every 90ms
+      _waveTicker = Timer.periodic(const Duration(milliseconds: 90), (timer) async {
+        if (!mounted || !_isVoiceRecording || _isRecordingPaused) return;
+        Amplitude? amp;
+        try {
+          amp = await _audioRecorder?.getAmplitude();
+        } catch (e) {
+          debugPrint('getAmplitude error: $e');
+        }
+        if (amp != null) {
+          _handleAmplitude(amp.current);
+        }
+      });
+
+      HapticFeedback.lightImpact();
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        if (!_isRecordingPaused) {
+          setState(() {
+            _recordingDuration++;
+          });
+        }
+      });
+
+      if (isHold && !_isVoicePointerDown) {
+        _finishVoiceRecording(send: true);
+      }
+    } catch (e) {
+      debugPrint('Error starting audio recording: $e');
+      if (mounted) {
+        AppToast.error(
+          context,
+          LanguageManager.isEnglish()
+              ? 'Failed to start recording'
+              : 'Không thể bắt đầu ghi âm',
+        );
+      }
+    } finally {
+      _isStartingVoiceRecording = false;
+    }
+  }
+
+  void _togglePauseVoiceRecording() async {
+    HapticFeedback.lightImpact();
+    if (_audioRecorder != null) {
+      try {
+        if (_isRecordingPaused) {
+          await _audioRecorder!.resume();
+        } else {
+          await _audioRecorder!.pause();
+        }
+      } catch (e) {
+        debugPrint('Toggle pause error: $e');
+      }
+    }
+    setState(() {
+      _isRecordingPaused = !_isRecordingPaused;
+    });
+  }
+
+  void _cancelVoiceRecording() async {
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+    _waveTicker?.cancel();
+    _waveTicker = null;
+    _holdDetectTimer?.cancel();
+    _holdDetectTimer = null;
+    HapticFeedback.mediumImpact();
+
+    if (_audioRecorder != null) {
+      try {
+        if (await _audioRecorder!.isRecording() || await _audioRecorder!.isPaused()) {
+          await _audioRecorder!.stop();
+        }
+      } catch (_) {}
+    }
+
+    if (_currentRecordingPath != null) {
+      try {
+        final f = File(_currentRecordingPath!);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+      _currentRecordingPath = null;
+    }
+
+    setState(() {
+      _isVoiceRecording = false;
+      _isRecordingPaused = false;
+      _isHoldMode = false;
+      _recordingDuration = 0;
+      _fullRecordingAmplitudes.clear();
+      _recordingAmplitudes = List.filled(24, 0.0, growable: true);
+    });
+  }
+
+  void _finishVoiceRecording({bool send = true}) async {
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+    _waveTicker?.cancel();
+    _waveTicker = null;
+    _holdDetectTimer?.cancel();
+    _holdDetectTimer = null;
+
+    String? savedPath;
+    if (_audioRecorder != null) {
+      try {
+        if (await _audioRecorder!.isRecording() || await _audioRecorder!.isPaused()) {
+          savedPath = await _audioRecorder!.stop();
+        }
+      } catch (e) {
+        debugPrint('Error stopping recorder: $e');
+      }
+    }
+    savedPath ??= _currentRecordingPath;
+    final int duration = _recordingDuration;
+    final List<double> recordedAmps;
+    if (_fullRecordingAmplitudes.isEmpty) {
+      recordedAmps = List.filled(20, 0.0, growable: true);
+    } else if (_fullRecordingAmplitudes.length < 20) {
+      recordedAmps = List.generate(20, (i) {
+        final idx = (i * _fullRecordingAmplitudes.length) ~/ 20;
+        return _fullRecordingAmplitudes[idx];
+      });
+    } else {
+      recordedAmps = List.generate(20, (i) {
+        final start = (i * _fullRecordingAmplitudes.length) ~/ 20;
+        final end = (((i + 1) * _fullRecordingAmplitudes.length) ~/ 20)
+            .clamp(start + 1, _fullRecordingAmplitudes.length);
+        double peak = 0.0;
+        for (int j = start; j < end; j++) {
+          if (_fullRecordingAmplitudes[j] > peak) {
+            peak = _fullRecordingAmplitudes[j];
+          }
+        }
+        return peak;
+      });
+    }
+
+    setState(() {
+      _isVoiceRecording = false;
+      _isRecordingPaused = false;
+      _isHoldMode = false;
+      _recordingDuration = 0;
+      _fullRecordingAmplitudes.clear();
+      _recordingAmplitudes = List.filled(24, 0.0, growable: true);
+    });
+
+    if (send) {
+      final int finalDuration = duration < 1 ? 1 : duration;
+      _sendVoiceMessage(finalDuration, savedPath, recordedAmps);
+    }
+  }
+
+  void _sendVoiceMessage(int durationSeconds, String? filePath, [List<double>? amplitudes]) async {
+    if (_isBlocked) return;
+    final now = DateTime.now();
+    final hour12 = now.hour % 12 == 0 ? 12 : now.hour % 12;
+    final timeString = "$hour12:${now.minute.toString().padLeft(2, '0')} ${now.hour >= 12 ? 'PM' : 'AM'}";
+    final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
+
+    final String content = _formatRecordingDuration(durationSeconds);
+    final replyData = _replyingTo;
+    final String? replyToId = replyData?['id']?.toString();
+
+    final Map<String, dynamic> optimisticMsg = {
+      'id': tempId,
+      'tempId': tempId,
+      'text': content,
+      'type': 'audio',
+      'duration': durationSeconds,
+      'filePath': filePath,
+      'amplitudes': amplitudes ?? List.filled(20, 0.0, growable: true),
+      'isMe': true,
+      'time': timeString,
+      'createdAt': now.toIso8601String(),
+      'seenBy': [],
+      'recipientOnlyFriends': !_isGroup &&
+          _otherUserWhoCanMessage == 'friends' &&
+          !_effectiveIsFriend,
+    };
+    if (replyData != null) {
+      optimisticMsg['replyTo'] = replyData;
+    }
+
+    setState(() {
+      _messages.add(optimisticMsg);
+      _replyingTo = null;
+    });
+
+    _scrollToBottom();
+
+    final currentConvId = _activeConversationId ?? widget.conversationId;
+    final effectiveReceiverId = widget.receiverId ?? (!_isGroup ? widget.name : null);
+
+    if (currentConvId != null || effectiveReceiverId != null) {
+      final res = await MessageService.sendMessage(
+        content: content,
+        type: 'audio',
+        audioFile: (filePath != null && filePath.isNotEmpty) ? File(filePath) : null,
+        amplitudes: amplitudes,
+        duration: durationSeconds,
+        conversationId: currentConvId,
+        receiverId: currentConvId != null ? null : effectiveReceiverId,
+        replyToId: replyToId,
+      );
+      if (res != null && mounted) {
+        setState(() {
+          final returnedConvId = res['conversationId'] ?? res['data']?['conversationId'];
+          if (res['id'] != null) {
+            optimisticMsg['id'] = res['id'];
+          } else if (res['data']?['id'] != null) {
+            optimisticMsg['id'] = res['data']['id'];
+          }
+          if (res['attachments'] != null) {
+            optimisticMsg['attachments'] = res['attachments'];
+          }
+          final resAmps = res['amplitudes'] ?? res['data']?['amplitudes'];
+          if (resAmps is List && resAmps.isNotEmpty) {
+            optimisticMsg['amplitudes'] = resAmps;
+          }
+          if (returnedConvId != null && _activeConversationId == null) {
+            _activeConversationId = returnedConvId.toString();
+            SocketService.joinConversation(_activeConversationId!);
+          }
+        });
+      }
+    }
+  }
+
+  Widget _buildVoiceRecordButton() {
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (event) {
+        _isVoicePointerDown = true;
+        _pointerStartX = event.position.dx;
+        _holdDetectTimer?.cancel();
+        _holdDetectTimer = Timer(const Duration(milliseconds: 300), () {
+          _startVoiceRecording(isHold: true);
+        });
+      },
+      onPointerMove: (event) {
+        if (_isVoiceRecording && _isHoldMode) {
+          if (event.position.dx - _pointerStartX < -80) {
+            _isVoicePointerDown = false;
+            _cancelVoiceRecording();
+            AppToast.info(context, LanguageManager.isEnglish() ? 'Recording cancelled' : 'Đã huỷ ghi âm');
+          }
+        }
+      },
+      onPointerUp: (event) {
+        _isVoicePointerDown = false;
+        if (_holdDetectTimer?.isActive == true) {
+          _holdDetectTimer?.cancel();
+          _startVoiceRecording(isHold: false);
+        } else {
+          if (_isVoiceRecording && _isHoldMode) {
+            _finishVoiceRecording(send: true);
+          }
+        }
+      },
+      onPointerCancel: (_) {
+        _isVoicePointerDown = false;
+        _holdDetectTimer?.cancel();
+        if (_isVoiceRecording && _isHoldMode) {
+          _cancelVoiceRecording();
+        }
+      },
+      child: ClipOval(
+        clipBehavior: Clip.antiAlias,
+        child: Container(
+          width: 38.r,
+          height: 38.r,
+          color: context.chatAttachBtnBg,
+          child: Center(
+            child: Icon(Icons.mic_rounded, color: AppColors.blue, size: 20.r),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVoiceRecordingBar() {
+    return Container(
+      height: 48.h,
+      padding: EdgeInsets.symmetric(horizontal: 4.w),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: _cancelVoiceRecording,
+            icon: Icon(
+              Icons.delete_rounded,
+              color: const Color(0xFF0010B4),
+              size: 26.r,
+            ),
+            splashRadius: 22.r,
+          ),
+          SizedBox(width: 4.w),
+          Expanded(
+            child: Container(
+              height: 44.h,
+              padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0010B4),
+                borderRadius: BorderRadius.circular(24.r),
+              ),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: _togglePauseVoiceRecording,
+                    child: Container(
+                      width: 32.r,
+                      height: 32.r,
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        _isRecordingPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                        color: const Color(0xFF0010B4),
+                        size: 20.r,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 8.w),
+                  Expanded(
+                    child: VoiceWaveformBars(
+                      isPaused: _isRecordingPaused,
+                      amplitudes: _recordingAmplitudes,
+                    ),
+                  ),
+                  SizedBox(width: 8.w),
+                  Text(
+                    _formatRecordingDuration(_recordingDuration),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14.sp,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(width: 6.w),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(width: 4.w),
+          IconButton(
+            onPressed: () => _finishVoiceRecording(send: true),
+            icon: Icon(
+              Icons.send_rounded,
+              color: const Color(0xFF0010B4),
+              size: 26.r,
+            ),
+            splashRadius: 22.r,
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildMenuItem({
@@ -3504,18 +4703,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     if (_showMentionList) {
       setState(() {
         _showMentionList = false;
-        _mentionQuery = '';
         _mentionSuggestions = [];
       });
     }
   }
 
   void _updateMentionSuggestions(String query) {
-    final isEn = LanguageManager.isEnglish();
-    final allTag = isEn ? '@All' : '@Mọi người';
-    final allSubtitle = isEn
-        ? 'Mention all members in group'
-        : 'Nhắc đến tất cả thành viên trong nhóm';
+    final l10n = context.l10n;
+    final allTag = l10n.mentionAllTag;
+    final allSubtitle = l10n.mentionAllSubtitle;
+    final allKeywords = l10n.mentionAllKeywords.toLowerCase().split(',');
 
     final List<Map<String, dynamic>> results = [];
     final cleanQuery = query.trim().toLowerCase();
@@ -3523,10 +4720,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
     if (_isGroup) {
       final bool matchAll = cleanQuery.isEmpty ||
-          'all'.contains(cleanQuery) ||
-          'mọi người'.contains(cleanQuery) ||
-          'moi nguoi'.contains(cleanQueryNoDiacritics) ||
-          'everyone'.contains(cleanQuery);
+          allKeywords.any((k) => k.trim().contains(cleanQuery)) ||
+          allTag.toLowerCase().contains(cleanQuery);
 
       if (matchAll) {
         results.add({
@@ -3535,8 +4730,24 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           'tag': allTag,
           'subtitle': allSubtitle,
           'isAll': true,
+          'isAi': false,
         });
       }
+    }
+
+    final bool matchAi = cleanQuery.isEmpty ||
+        'vioraai'.contains(cleanQueryNoDiacritics) ||
+        'viora ai'.contains(cleanQueryNoDiacritics) ||
+        'ai'.contains(cleanQueryNoDiacritics);
+    if (matchAi) {
+      results.add({
+        'id': 'viora_ai',
+        'name': 'VioraAI',
+        'tag': '@VioraAI',
+        'subtitle': l10n.mentionAiSubtitle,
+        'isAll': false,
+        'isAi': true,
+      });
     }
 
     final members = _availableMentionMembers;
@@ -3558,13 +4769,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           'avatar': m['avatar']?.toString(),
           'subtitle': null,
           'isAll': false,
+          'isAi': false,
         });
       }
     }
 
     if (mounted) {
       setState(() {
-        _mentionQuery = query;
         _mentionSuggestions = results;
         _showMentionList = results.isNotEmpty;
       });
@@ -3590,11 +4801,18 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         text: newText,
         selection: TextSelection.collapsed(offset: newPrefix.length + inserted.length),
       );
+
+      _selectedMentions.add({
+        'id': item['id']?.toString() ?? '',
+        'name': item['name']?.toString() ?? '',
+        'tag': tag,
+        'isAll': item['isAll'] == true,
+        'isAi': item['isAi'] == true,
+      });
     }
 
     setState(() {
       _showMentionList = false;
-      _mentionQuery = '';
       _mentionSuggestions = [];
     });
     _focusNode.requestFocus();
@@ -3676,79 +4894,121 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           children: [
             if (_replyingTo != null)
               _buildReplyBanner(),
-            Row(
+            Stack(
+              alignment: Alignment.center,
               children: [
-                _buildInputActionButton(
-                  key: _plusButtonKey,
-                  icon: Icons.add_rounded,
-                  iconSize: 22,
-                  onTap: _handleMoreOptions,
-                ),
-                SizedBox(width: 6.w),
-                _buildInputActionButton(
-                  icon: Icons.image_rounded,
-                  iconSize: 20,
-                  onTap: _handlePickImage,
-                ),
-                SizedBox(width: 6.w),
-                _buildInputActionButton(
-                  icon: Icons.mic_rounded,
-                  iconSize: 20,
-                  onTap: _handleVoiceRecord,
-                ),
-                SizedBox(width: 8.w),
+                Opacity(
+                  opacity: _isVoiceRecording ? 0.0 : 1.0,
+                  child: IgnorePointer(
+                    ignoring: _isVoiceRecording && !_isHoldMode,
+                    child: Row(
+                      children: [
+                        _buildInputActionButton(
+                          key: _plusButtonKey,
+                          icon: Icons.add_rounded,
+                          iconSize: 22,
+                          onTap: _handleMoreOptions,
+                        ),
+                        SizedBox(width: 6.w),
+                        _buildInputActionButton(
+                          icon: Icons.image_rounded,
+                          iconSize: 20,
+                          onTap: _handlePickImage,
+                        ),
+                        SizedBox(width: 6.w),
+                        _buildVoiceRecordButton(),
+                        SizedBox(width: 8.w),
 
-                Expanded(
-                  child: Container(
-                    clipBehavior: Clip.antiAlias,
-                    decoration: BoxDecoration(
-                      color: context.isDark ? const Color(0xFF1E1E2C) : Colors.grey.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(24.r),
-                    ),
-                    child: TextField(
-                      controller: _messageController,
-                      focusNode: _focusNode,
-                      onSubmitted: (_) => _sendMessage(),
-                      style: TextStyle(
-                        color: context.textPrimary,
-                        fontSize: 14.sp,
-                      ),
-                      decoration: InputDecoration(
-                        filled: true,
-                        fillColor: context.isDark ? const Color(0xFF1E1E2C) : Colors.grey.withValues(alpha: 0.1),
-                        hintText: l10n.typeAMessage,
-                        hintStyle: TextStyle(
-                          color: context.textMuted,
-                          fontSize: 14.sp,
+                        Expanded(
+                          child: Container(
+                            clipBehavior: Clip.antiAlias,
+                            decoration: BoxDecoration(
+                              color: context.isDark ? const Color(0xFF1E1E2C) : Colors.grey.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(24.r),
+                            ),
+                            child: TextField(
+                              controller: _messageController,
+                              focusNode: _focusNode,
+                              onSubmitted: (_) => _sendMessage(),
+                              style: TextStyle(
+                                color: context.textPrimary,
+                                fontSize: 14.sp,
+                              ),
+                              decoration: InputDecoration(
+                                filled: true,
+                                fillColor: context.isDark ? const Color(0xFF1E1E2C) : Colors.grey.withValues(alpha: 0.1),
+                                hintText: l10n.typeAMessage,
+                                hintStyle: TextStyle(
+                                  color: context.textMuted,
+                                  fontSize: 14.sp,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24.r),
+                                  borderSide: BorderSide.none,
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24.r),
+                                  borderSide: BorderSide.none,
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24.r),
+                                  borderSide: BorderSide.none,
+                                ),
+                                contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+                              ),
+                            ),
+                          ),
                         ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24.r),
-                          borderSide: BorderSide.none,
+                        SizedBox(width: 4.w),
+
+                        ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _messageController,
+                          builder: (context, value, _) {
+                            final hasText = value.text.trim().isNotEmpty;
+                            if (hasText) {
+                              return IconButton(
+                                onPressed: _sendMessage,
+                                icon: Icon(
+                                  Icons.send_rounded,
+                                  color: AppColors.blue,
+                                  size: 28.r,
+                                ),
+                                splashRadius: 24.r,
+                              );
+                            }
+                            final quickAsset = ChatInfoScreen.getReactionAsset(_quickEmoji);
+                            return Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(24.r),
+                                onTap: _sendQuickEmoji,
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+                                  child: quickAsset != null
+                                      ? Image.asset(
+                                          quickAsset,
+                                          width: 28.r,
+                                          height: 28.r,
+                                          fit: BoxFit.contain,
+                                        )
+                                      : Text(
+                                          _quickEmoji,
+                                          style: TextStyle(fontSize: 26.sp),
+                                        ),
+                                ),
+                              ),
+                            );
+                          },
                         ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24.r),
-                          borderSide: BorderSide.none,
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24.r),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
-                      ),
+                      ],
                     ),
                   ),
                 ),
-                SizedBox(width: 4.w),
-
-                IconButton(
-                  onPressed: _sendMessage,
-                  icon: Icon(
-                    Icons.send_rounded,
-                    color: AppColors.blue,
-                    size: 28.r,
+                if (_isVoiceRecording)
+                  IgnorePointer(
+                    ignoring: _isHoldMode,
+                    child: _buildVoiceRecordingBar(),
                   ),
-                  splashRadius: 24.r,
-                ),
               ],
             ),
           ],

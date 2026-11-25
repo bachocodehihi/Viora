@@ -139,10 +139,12 @@ class PostCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: isGroupPost
                     ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           GestureDetector(
                             onTap: () {
@@ -229,6 +231,7 @@ class PostCard extends StatelessWidget {
                                             fontSize: 14.5,
                                             color: context.textPrimary,
                                           ),
+                                          maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
@@ -266,12 +269,16 @@ class PostCard extends StatelessWidget {
                                 Row(
                                   children: [
                                     if (isAnon) ...[
-                                      Text(
-                                        authorName,
-                                        style: TextStyle(
-                                          fontSize: 11.5,
-                                          color: context.textSubtle,
-                                          fontWeight: FontWeight.w500,
+                                      Flexible(
+                                        child: Text(
+                                          authorName,
+                                          style: TextStyle(
+                                            fontSize: 11.5,
+                                            color: context.textSubtle,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
                                       const SizedBox(width: 4),
@@ -291,26 +298,30 @@ class PostCard extends StatelessWidget {
                                         ),
                                       ),
                                     ] else ...[
-                                      GestureDetector(
-                                        onTap: () {
-                                          Navigator.pushNamed(
-                                            context,
-                                            AppRoutes.profileAccount,
-                                            arguments: {
-                                              'id': post['userId'] ?? postId,
-                                              'email': post['userEmail'],
-                                              'name': authorName,
-                                              'avatar': avatarUrl,
-                                              'color': avatarColor,
-                                            },
-                                          );
-                                        },
-                                        child: Text(
-                                          authorName,
-                                          style: TextStyle(
-                                            fontSize: 11.5,
-                                            color: context.textSubtle,
-                                            fontWeight: FontWeight.w500,
+                                      Flexible(
+                                        child: GestureDetector(
+                                          onTap: () {
+                                            Navigator.pushNamed(
+                                              context,
+                                              AppRoutes.profileAccount,
+                                              arguments: {
+                                                'id': post['userId'] ?? postId,
+                                                'email': post['userEmail'],
+                                                'name': authorName,
+                                                'avatar': avatarUrl,
+                                                'color': avatarColor,
+                                              },
+                                            );
+                                          },
+                                          child: Text(
+                                            authorName,
+                                            style: TextStyle(
+                                              fontSize: 11.5,
+                                              color: context.textSubtle,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
                                           ),
                                         ),
                                       ),
@@ -345,6 +356,7 @@ class PostCard extends StatelessWidget {
                         },
                         behavior: HitTestBehavior.opaque,
                         child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             AppAvatar(
                               avatar: avatarUrl,
@@ -354,26 +366,32 @@ class PostCard extends StatelessWidget {
                               fontSize: 13,
                             ),
                             const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  authorName,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                    color: context.textPrimary,
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    authorName,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                      color: context.textPrimary,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  timeStr,
-                                  style: TextStyle(
-                                    color: context.textSubtle,
-                                    fontSize: 11,
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    timeStr,
+                                    style: TextStyle(
+                                      color: context.textSubtle,
+                                      fontSize: 11,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ],
                         ),
@@ -395,8 +413,16 @@ class PostCard extends StatelessWidget {
                     onCommentSettingsChanged: onCommentSettingsChanged ?? (_) {},
                   );
                 },
-                padding: EdgeInsets.zero,
+                padding: const EdgeInsets.only(top: 2, left: 8),
                 constraints: const BoxConstraints(),
+                hoverColor: Colors.transparent,
+                focusColor: Colors.transparent,
+                highlightColor: Colors.transparent,
+                splashColor: Colors.transparent,
+                style: const ButtonStyle(
+                  overlayColor: WidgetStatePropertyAll(Colors.transparent),
+                  splashFactory: NoSplash.splashFactory,
+                ),
               ),
             ],
           ),
@@ -485,12 +511,15 @@ class PostCard extends StatelessWidget {
               GestureDetector(
                 onTap: onShareTap ??
                     () {
+                      final pId = (post['_id'] ?? post['id'])?.toString() ?? '';
                       Navigator.pushNamed(
                         context,
                         AppRoutes.share,
                         arguments: {
                           'postAuthor': authorName,
                           'postContent': contentStr,
+                          'postId': pId,
+                          'post': post,
                         },
                       );
                     },

@@ -132,6 +132,7 @@ class GroupsScreen extends StatelessWidget {
                   'privacy': gPrivacy,
                   'description': grp['description'] ?? grp['lastMessage'],
                   'conversationId': grp['conversationId']?.toString() ?? grp['id']?.toString(),
+                  'isMember': true,
                 },
               ).then((_) => onRefresh?.call());
             },

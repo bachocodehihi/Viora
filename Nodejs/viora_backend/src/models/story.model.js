@@ -12,6 +12,12 @@ const storySchema = new mongoose.Schema({
     viewedAt: { type: Date, default: Date.now }
   }],
   
+  reactions: [{
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'Account' },
+    reaction: { type: String, default: 'heart' },
+    createdAt: { type: Date, default: Date.now }
+  }],
+  
   privacy: { type: String, enum: ['public', 'friends', 'private'], default: 'friends' },
   
   expiresAt: { 

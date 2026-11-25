@@ -879,7 +879,7 @@ const followAccount = async (req, res) => {
 
     const io = getIO ? getIO() : null;
     if (io && updatedCurrentAcc && updatedTargetAcc) {
-      // 1. Gửi socket cho người được theo dõi (targetUserId)
+
       io.to(targetUserId.toString()).emit('follower_added', {
         user: {
           id: updatedCurrentAcc._id.toString(),
@@ -892,7 +892,6 @@ const followAccount = async (req, res) => {
         followersCount: updatedTargetAcc.followersCount,
       });
 
-      // 2. Gửi socket cho chính người bấm theo dõi (userId) để cập nhật ngay tab Đã theo dõi
       io.to(userId.toString()).emit('following_added', {
         user: {
           id: updatedTargetAcc._id.toString(),

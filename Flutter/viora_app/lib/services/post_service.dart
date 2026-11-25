@@ -768,4 +768,64 @@ class PostService {
       return false;
     }
   }
+
+  static Future<Map<String, dynamic>?> getPost(String postId) async {
+    try {
+      final token = await SessionService.getToken();
+      final uri = Uri.parse('${ApiConfig.getPostDetail}/$postId');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      };
+
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+          final data = decoded['data'] ?? decoded['post'];
+          if (data is Map) return Map<String, dynamic>.from(data);
+        }
+      }
+    } catch (e) {
+      debugPrint('PostService.getPost error: $e');
+    }
+    return null;
+  }
+
+  static Future<Map<String, dynamic>?> findPost({String? content, String? authorName, String? postId}) async {
+    try {
+      final token = await SessionService.getToken();
+      final uri = Uri.parse(ApiConfig.findPost);
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      };
+
+      final body = <String, dynamic>{
+        if (content != null && content.isNotEmpty) 'content': content,
+        if (authorName != null && authorName.isNotEmpty) 'authorName': authorName,
+        if (postId != null && postId.isNotEmpty) 'postId': postId,
+      };
+
+      final response = await http
+          .post(uri, headers: headers, body: jsonEncode(body))
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+          final data = decoded['data'] ?? decoded['post'];
+          if (data is Map) return Map<String, dynamic>.from(data);
+        }
+      }
+    } catch (e) {
+      debugPrint('PostService.findPost error: $e');
+    }
+    return null;
+  }
 }

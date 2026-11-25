@@ -285,7 +285,6 @@ const getFeed = async (req, res) => {
       }).select('_id').lean();
       const lockedAuthorIds = lockedPrivateAccounts.map(a => a._id);
 
-      // Find groups the user has joined
       const userGroups = await Group.find({ 'members.user': userId }).select('_id').lean();
       const myGroupIds = userGroups.map(g => g._id);
 
@@ -336,7 +335,7 @@ const getFeed = async (req, res) => {
       const allPrivateAccounts = await Account.find({ isPrivate: true }).select('_id').lean();
       const privateAuthorIds = allPrivateAccounts.map(a => a._id);
       query.privacy = 'public';
-      query.group = null; // No group posts for guests
+      query.group = null;
       if (privateAuthorIds.length > 0) {
         query.author = { $nin: privateAuthorIds };
       }
@@ -1465,6 +1464,188 @@ const getGroupPosts = async (req, res) => {
   }
 };
 
+const getPostById = async (req, res) => {
+  try {
+    const userId = await getUserIdFromReq(req);
+    const postId = req.params.postId || req.query.postId || req.body.postId;
+    if (!postId || !mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({ success: false, code: 'POST_ID_REQUIRED', message: 'Valid postId is required' });
+    }
+
+    const p = await Post.findById(postId)
+      .populate('author', 'username avatar email isOnline')
+      .populate('group', 'name avatar')
+      .lean();
+
+    if (!p || p.isDeleted) {
+      return res.status(404).json({ success: false, code: 'POST_NOT_FOUND', message: 'Post not found' });
+    }
+
+    let friendIds = [];
+    if (userId) {
+      const currentUser = await Account.findById(userId).select('friends').lean();
+      friendIds = (currentUser?.friends || []).map(f => f.toString());
+    }
+
+    let userLike = null;
+    if (userId) {
+      userLike = await Like.findOne({ user: userId, target: p._id }).lean();
+    }
+
+    const author = p.author || {};
+    const authorId = author._id ? author._id.toString() : (p.author ? p.author.toString() : '');
+    const isOwner = userId ? (authorId === userId.toString()) : false;
+    const isAnonymous = p.isAnonymous === true;
+
+    const displayUsername = isAnonymous
+      ? (isOwner ? 'Anonymous Member (You)' : 'Anonymous Member')
+      : (author.username || author.name || 'User');
+    const displayAvatar = isAnonymous ? null : (author.avatar || null);
+
+    const groupData = p.group && typeof p.group === 'object' && p.group._id ? {
+      id: p.group._id.toString(),
+      _id: p.group._id.toString(),
+      name: p.group.name || '',
+      avatar: p.group.avatar || '',
+    } : (p.group ? { id: p.group.toString(), _id: p.group.toString(), name: '', avatar: '' } : null);
+
+    const commentsDisabled = p.commentsDisabled === true;
+    const blockedCommenters = (p.blockedCommenters || []).map(b => b.toString());
+    const allowedCommenters = (p.allowedCommenters || []).map(a => a.toString());
+    const commentPermission = p.commentPermission || 'everyone';
+
+    let canComment = true;
+    let commentRestrictionReason = '';
+    if (commentsDisabled) {
+      canComment = false;
+      commentRestrictionReason = 'comments_disabled';
+    } else if (userId && blockedCommenters.includes(userId.toString())) {
+      canComment = false;
+      commentRestrictionReason = 'blocked';
+    } else if (!isOwner && userId) {
+      if (commentPermission === 'friends' && !friendIds.includes(authorId)) {
+        canComment = false;
+        commentRestrictionReason = 'friends_only';
+      } else if (commentPermission === 'selected' && !allowedCommenters.includes(userId.toString())) {
+        canComment = false;
+        commentRestrictionReason = 'selected_only';
+      }
+    }
+
+    const formattedPost = {
+      ...p,
+      id: p._id.toString(),
+      _id: p._id.toString(),
+      userId: isAnonymous ? (isOwner ? authorId : '') : authorId,
+      userEmail: isAnonymous ? '' : (author.email || ''),
+      userName: displayUsername,
+      avatar: displayAvatar,
+      isAnonymous: isAnonymous,
+      postType: p.postType || (groupData ? 'group' : 'user'),
+      group: groupData,
+      author: {
+        _id: isAnonymous ? (isOwner ? authorId : '') : authorId,
+        username: displayUsername,
+        name: displayUsername,
+        avatar: displayAvatar,
+        email: isAnonymous ? '' : (author.email || ''),
+      },
+      time: p.createdAt ? new Date(p.createdAt).toISOString() : new Date().toISOString(),
+      createdAt: p.createdAt,
+      content: p.content || '',
+      images: Array.isArray(p.images) ? p.images : [],
+      videos: Array.isArray(p.videos) ? p.videos : [],
+      likes: p.likesCount || 0,
+      likesCount: p.likesCount || 0,
+      comments: p.commentsCount || 0,
+      commentsCount: p.commentsCount || 0,
+      isLiked: !!userLike,
+      reaction: userLike?.type || null,
+      privacy: p.privacy || 'public',
+      commentsDisabled: commentsDisabled,
+      commentPermission: commentPermission,
+      canComment: canComment,
+      commentRestrictionReason: commentRestrictionReason,
+    };
+
+    return res.status(200).json({ success: true, data: formattedPost, post: formattedPost });
+  } catch (error) {
+    console.error('getPostById error:', error);
+    return res.status(500).json({ success: false, code: 'GET_POST_FAILED', message: error.message || 'Failed to load post' });
+  }
+};
+
+const findPost = async (req, res) => {
+  try {
+    const { content, postId, authorName, author, username } = { ...req.query, ...req.body };
+    if (postId && mongoose.Types.ObjectId.isValid(postId)) {
+      req.params.postId = postId;
+      return getPostById(req, res);
+    }
+
+    const targetAuthor = (authorName || author || username || '').toString().trim();
+    let authorId = null;
+    if (targetAuthor) {
+      const escapedAuthor = targetAuthor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const acc = await Account.findOne({
+        $or: [
+          { username: { $regex: `^${escapedAuthor}$`, $options: 'i' } },
+          { name: { $regex: `^${escapedAuthor}$`, $options: 'i' } }
+        ],
+        isDeleted: false
+      }).select('_id username avatar email').lean();
+      if (acc) {
+        authorId = acc._id;
+      }
+    }
+
+    let cleanSnippet = '';
+    if (content && typeof content === 'string' && content.trim()) {
+      cleanSnippet = content.trim().replace(/^["'“”]+|["'“”]+$/g, '').trim();
+      const lines = cleanSnippet.split('\n').map(l => l.trim()).filter(Boolean);
+      if (lines.length > 0) {
+        cleanSnippet = lines[0];
+      }
+    }
+
+    let foundPost = null;
+
+    if (authorId && cleanSnippet) {
+      const escapedSnippet = cleanSnippet.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      foundPost = await Post.findOne({
+        author: authorId,
+        content: { $regex: escapedSnippet, $options: 'i' },
+        isDeleted: false
+      }).sort({ createdAt: -1 }).lean();
+    }
+
+    if (!foundPost && authorId) {
+      foundPost = await Post.findOne({
+        author: authorId,
+        isDeleted: false
+      }).sort({ createdAt: -1 }).lean();
+    }
+
+    if (!foundPost && cleanSnippet) {
+      const escapedSnippet = cleanSnippet.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      foundPost = await Post.findOne({
+        content: { $regex: escapedSnippet, $options: 'i' },
+        isDeleted: false
+      }).sort({ createdAt: -1 }).lean();
+    }
+
+    if (foundPost) {
+      req.params.postId = foundPost._id.toString();
+      return getPostById(req, res);
+    }
+
+    return res.status(404).json({ success: false, code: 'POST_NOT_FOUND', message: 'Post not found' });
+  } catch (error) {
+    console.error('findPost error:', error);
+    return res.status(500).json({ success: false, code: 'FIND_POST_FAILED', message: error.message || 'Failed to find post' });
+  }
+};
+
 module.exports = { 
   publishPost,
   getFeed,
@@ -1483,5 +1664,7 @@ module.exports = {
   updateCommentSettings,
   blockCommenter,
   unblockCommenter,
-  deleteComment
+  deleteComment,
+  getPostById,
+  findPost
 };

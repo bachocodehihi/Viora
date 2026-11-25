@@ -28,7 +28,10 @@ class GroupQrScreen extends StatelessWidget {
   });
 
   String get _qrPayload {
-    if (qrCode != null && qrCode!.trim().isNotEmpty) {
+    if (qrCode != null &&
+        qrCode!.trim().isNotEmpty &&
+        !qrCode!.trim().startsWith('http') &&
+        !qrCode!.trim().startsWith('data:')) {
       return qrCode!.trim();
     }
     return jsonEncode({

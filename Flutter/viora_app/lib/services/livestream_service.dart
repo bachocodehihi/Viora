@@ -10,6 +10,9 @@ class LivestreamService {
     required String title,
     required String mode,
     String? thumbnail,
+    String privacy = 'public',
+    String? groupId,
+    List<String>? allowedViewers,
   }) async {
     try {
       final token = await SessionService.getToken();
@@ -25,8 +28,11 @@ class LivestreamService {
       final body = <String, dynamic>{
         'title': title,
         'mode': mode,
-        'thumbnail': ?thumbnail,
-        'userId': ?myUserId,
+        'privacy': privacy,
+        if (thumbnail != null) 'thumbnail': thumbnail,
+        if (myUserId != null) 'userId': myUserId,
+        if (groupId != null) 'groupId': groupId,
+        if (allowedViewers != null && allowedViewers.isNotEmpty) 'allowedViewers': allowedViewers,
       };
 
       final response = await http
@@ -48,8 +54,14 @@ class LivestreamService {
 
   static Future<List<Map<String, dynamic>>> getActiveLives() async {
     try {
+      final token = await SessionService.getToken();
       final uri = Uri.parse(ApiConfig.getActiveLives);
-      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      };
+      final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
@@ -80,9 +92,9 @@ class LivestreamService {
 
       final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 15));
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 403) {
         final decoded = jsonDecode(response.body);
-        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+        if (decoded is Map<String, dynamic>) {
           return decoded;
         }
       }

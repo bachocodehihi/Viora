@@ -362,8 +362,11 @@ class _PinMessageScreenState extends State<PinMessageScreen> {
       child: Scaffold(
         backgroundColor: context.scaffoldBg,
         appBar: AppBar(
+          backgroundColor: context.scaffoldBg,
+          elevation: 0,
+          titleSpacing: 0,
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
+            icon: const Icon(Icons.arrow_back_ios_new, size: 20),
             onPressed: _popWithCurrentList,
           ),
           title: Column(
@@ -371,7 +374,11 @@ class _PinMessageScreenState extends State<PinMessageScreen> {
             children: [
               Text(
                 l10n.pinnedMessageTitle,
-                style: TextStyle(fontSize: 17.sp, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  fontSize: 18.sp,
+                  fontWeight: FontWeight.bold,
+                  color: context.textPrimary,
+                ),
               ),
               if (_pinnedMessages.isNotEmpty)
                 Text(
@@ -406,32 +413,36 @@ class _PinMessageScreenState extends State<PinMessageScreen> {
         ),
         body: _pinnedMessages.isEmpty
             ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 76.r,
-                      height: 76.r,
-                      decoration: BoxDecoration(
-                        color: AppColors.blue.withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 42.w),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 76.r,
+                        height: 76.r,
+                        decoration: BoxDecoration(
+                          color: AppColors.blue.withValues(alpha: 0.12),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.push_pin_outlined,
+                          size: 38.r,
+                          color: AppColors.blue,
+                        ),
                       ),
-                      child: Icon(
-                        Icons.push_pin_outlined,
-                        size: 38.r,
-                        color: AppColors.blue,
+                      SizedBox(height: 18.h),
+                      Text(
+                        l10n.noPinnedMessagesYet,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 14.sp,
+                          color: context.textMuted,
+                          height: 1.45,
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 16.h),
-                    Text(
-                      l10n.noPinnedMessagesYet,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14.sp,
-                        color: context.textMuted,
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               )
             : ListView.separated(

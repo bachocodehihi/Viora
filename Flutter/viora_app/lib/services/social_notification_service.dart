@@ -203,6 +203,41 @@ class SocialNotificationService {
         return l10n?.notifPostedNewPost ?? Language.translateStatic('notifPostedNewPost');
 
       case 'friend_story':
+        String effectiveReaction = (reaction != null && reaction.isNotEmpty)
+            ? reaction
+            : _detectReaction(rawContent);
+        if (effectiveReaction == '❤️' || effectiveReaction == 'heart' || effectiveReaction == '😍') {
+          effectiveReaction = 'love';
+        } else if (effectiveReaction == '😂') {
+          effectiveReaction = 'haha';
+        } else if (effectiveReaction == '🔥' || effectiveReaction == '😮') {
+          effectiveReaction = 'wow';
+        } else if (effectiveReaction == '😢') {
+          effectiveReaction = 'sad';
+        } else if (effectiveReaction == '😡') {
+          effectiveReaction = 'angry';
+        }
+
+        final isReaction = effectiveReaction.isNotEmpty ||
+            rawContent.contains('thả cảm xúc') ||
+            rawContent.toLowerCase().contains('react');
+
+        if (isReaction) {
+          switch (effectiveReaction) {
+            case 'love':
+              return l10n?.notifReactedLoveStory ?? Language.translateStatic('notifReactedLoveStory');
+            case 'haha':
+              return l10n?.notifReactedHahaStory ?? Language.translateStatic('notifReactedHahaStory');
+            case 'wow':
+              return l10n?.notifReactedWowStory ?? Language.translateStatic('notifReactedWowStory');
+            case 'sad':
+              return l10n?.notifReactedSadStory ?? Language.translateStatic('notifReactedSadStory');
+            case 'angry':
+              return l10n?.notifReactedAngryStory ?? Language.translateStatic('notifReactedAngryStory');
+            default:
+              return l10n?.notifReactedYourStory ?? Language.translateStatic('notifReactedYourStory');
+          }
+        }
         return l10n?.notifSharedNewStory ?? Language.translateStatic('notifSharedNewStory');
 
       case 'friend_request':

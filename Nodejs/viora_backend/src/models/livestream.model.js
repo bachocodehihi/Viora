@@ -2,10 +2,13 @@ const mongoose = require('mongoose');
 
 const liveStreamSchema = new mongoose.Schema({
   host: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', required: true },
-  title: { type: String, required: true, trim: true, default: 'Buổi phát trực tiếp' },
+  title: { type: String, required: true, trim: true, default: 'Live Stream' },
   channelName: { type: String, required: true, unique: true },
   mode: { type: String, enum: ['camera', 'screen'], default: 'camera' },
   status: { type: String, enum: ['live', 'ended'], default: 'live' },
+  privacy: { type: String, enum: ['public', 'friends', 'custom', 'group'], default: 'public' },
+  group: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', default: null },
+  allowedViewers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Account' }],
   
   viewersCount: { type: Number, default: 0 },
   maxViewers: { type: Number, default: 0 },

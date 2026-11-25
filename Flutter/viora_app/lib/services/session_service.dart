@@ -17,6 +17,53 @@ class SessionService {
   static const String _keyUserNote = 'user_status_note';
   static const String _keySavedAccounts = 'saved_accounts_list';
 
+  static const String _keyIsPrivate = 'cached_is_private';
+  static const String _keyShowActiveStatus = 'cached_show_active_status';
+  static const String _keyTwoFactor = 'cached_two_factor';
+  static const String _keyWhoCanMessage = 'cached_who_can_message';
+
+  static bool? cachedIsPrivate;
+  static bool? cachedShowActiveStatus;
+  static bool? cachedTwoFactor;
+  static String? cachedWhoCanMessage;
+
+  static Future<void> initPrivacyCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.containsKey(_keyIsPrivate)) cachedIsPrivate = prefs.getBool(_keyIsPrivate);
+      if (prefs.containsKey(_keyShowActiveStatus)) cachedShowActiveStatus = prefs.getBool(_keyShowActiveStatus);
+      if (prefs.containsKey(_keyTwoFactor)) cachedTwoFactor = prefs.getBool(_keyTwoFactor);
+      if (prefs.containsKey(_keyWhoCanMessage)) cachedWhoCanMessage = prefs.getString(_keyWhoCanMessage);
+    } catch (_) {}
+  }
+
+  static Future<void> savePrivacySettings({
+    bool? isPrivate,
+    bool? showActiveStatus,
+    bool? twoFactor,
+    String? whoCanMessage,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (isPrivate != null) {
+        cachedIsPrivate = isPrivate;
+        await prefs.setBool(_keyIsPrivate, isPrivate);
+      }
+      if (showActiveStatus != null) {
+        cachedShowActiveStatus = showActiveStatus;
+        await prefs.setBool(_keyShowActiveStatus, showActiveStatus);
+      }
+      if (twoFactor != null) {
+        cachedTwoFactor = twoFactor;
+        await prefs.setBool(_keyTwoFactor, twoFactor);
+      }
+      if (whoCanMessage != null) {
+        cachedWhoCanMessage = whoCanMessage;
+        await prefs.setString(_keyWhoCanMessage, whoCanMessage);
+      }
+    } catch (_) {}
+  }
+
   static Future<void> saveSession(
     String email, {
     String? token,

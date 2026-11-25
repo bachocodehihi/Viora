@@ -129,34 +129,50 @@ class _GroupMembersScreenState extends State<GroupMembersScreen> {
 
           Padding(
             padding: EdgeInsets.fromLTRB(16.w, 6.h, 16.w, 12.h),
-            child: Container(
-              height: 42.h,
-              decoration: BoxDecoration(
-                color: context.cardBg,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(
-                  color: context.isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (val) => setState(() => _searchQuery = val),
+              style: TextStyle(fontSize: 13.5.sp, color: context.textPrimary),
+              decoration: InputDecoration(
+                hintText: l10n.searchMembersHint,
+                hintStyle: TextStyle(fontSize: 13.5.sp, color: context.textMuted),
+                prefixIcon: Icon(Icons.search_rounded, size: 20.r, color: context.textMuted),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: Icon(Icons.clear_rounded, size: 18.r, color: context.textMuted),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => _searchQuery = '');
+                        },
+                      )
+                    : null,
+                contentPadding: EdgeInsets.symmetric(vertical: 10.h),
+                filled: true,
+                fillColor: context.cardBg,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14.r),
+                  borderSide: BorderSide(
+                    color: context.isDark
+                        ? Colors.white.withValues(alpha: 0.1)
+                        : Colors.black.withValues(alpha: 0.08),
+                    width: 1,
+                  ),
                 ),
-              ),
-              child: TextField(
-                controller: _searchController,
-                onChanged: (val) => setState(() => _searchQuery = val),
-                style: TextStyle(fontSize: 13.5.sp, color: context.textPrimary),
-                decoration: InputDecoration(
-                  hintText: l10n.searchMembersHint,
-                  hintStyle: TextStyle(fontSize: 13.sp, color: context.textMuted),
-                  prefixIcon: Icon(Icons.search_rounded, size: 20.r, color: context.textMuted),
-                  suffixIcon: _searchQuery.isNotEmpty
-                      ? GestureDetector(
-                          onTap: () {
-                            _searchController.clear();
-                            setState(() => _searchQuery = '');
-                          },
-                          child: Icon(Icons.close_rounded, size: 18.r, color: context.textMuted),
-                        )
-                      : null,
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(vertical: 10.h),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14.r),
+                  borderSide: BorderSide(
+                    color: context.isDark
+                        ? Colors.white.withValues(alpha: 0.1)
+                        : Colors.black.withValues(alpha: 0.08),
+                    width: 1,
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14.r),
+                  borderSide: BorderSide(
+                    color: AppColors.blue.withValues(alpha: 0.6),
+                    width: 1.2,
+                  ),
                 ),
               ),
             ),

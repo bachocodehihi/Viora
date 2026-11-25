@@ -5,7 +5,9 @@ const conversationMemberSchema = new mongoose.Schema({
   role: { type: String, enum: ['admin', 'member'], default: 'member' },
   lastReadAt: { type: Date, default: null },
   isMuted: { type: Boolean, default: false },
+  mutedUntil: { type: Date, default: null },
   isPinned: { type: Boolean, default: false },
+  clearedAt: { type: Date, default: null },
   joinedAt: { type: Date, default: Date.now }
 }, { _id: false });
 
@@ -17,7 +19,9 @@ const conversationSchema = new mongoose.Schema({
   lastMessage: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
   pinnedMessage: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
   pinnedMessages: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Message' }],
-  communityGroup: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', default: null }
+  communityGroup: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', default: null },
+  quickEmoji: { type: String, default: '👍' },
+  customEmojis: [{ type: String }]
 }, { timestamps: true });
 
 conversationSchema.index({ 'members.user': 1, updatedAt: -1 });

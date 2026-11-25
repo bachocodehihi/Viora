@@ -3,43 +3,348 @@ const Conversation = require('../models/conversation.model');
 const Message = require('../models/message.model');
 const Account = require('../models/account.model');
 const Group = require('../models/group.model');
+const Post = require('../models/post.model');
 const Call = require('../models/call.model');
 const { verifyToken } = require('../config/jwt.config');
 const { getIO, isUserOnline } = require('../socket');
 const { cloudinary } = require('../config/cloudinary');
 const { sendPushNotification } = require('../services/fcm.service');
+const aiService = require('../services/ai.service');
 
-function removeVietnameseDiacritics(str) {
-  if (!str) return '';
-  return str
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D');
-}
+const VIORA_AI_ID = 'viora_ai';
+const VIORA_AI_NAME = 'VioraAI';
 
-function hasMentionAll(text) {
+function containsVioraAIMention(text) {
   if (!text || typeof text !== 'string') return false;
-  const regex = /(?:^|[^\w@])@(all|mọi\s+người|moi\s+nguoi|everyone)(?:[^\w]|$)/i;
-  return regex.test(text);
+  return /(?:^|[^\w.])@Viora\s*AI\b/i.test(text);
 }
 
-function isMemberMentioned(text, username) {
-  if (!text || !username || typeof text !== 'string') return false;
-  const uClean = username.trim();
-  if (!uClean) return false;
-  const escapeRegex = (s) => s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&').replace(/\s+/g, '\\s+');
+function stripVioraAIMention(text) {
+  if (!text || typeof text !== 'string') return '';
+  return text.replace(/(?:^|(?<=\s))@Viora\s*AI\b/gi, '').replace(/\s{2,}/g, ' ').trim();
+}
 
-  const regex = new RegExp('(?:^|[^\\w@])@' + escapeRegex(uClean) + '(?:[^\\w]|$)', 'i');
-  if (regex.test(text)) return true;
+function detectAiReplyLanguage(text, fallbackLang = 'vi') {
+  const s = (text || '').trim();
+  if (!s) return fallbackLang === 'en' ? 'en' : 'vi';
+  const hasViDiacritics = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(s);
+  if (hasViDiacritics) return 'vi';
+  const hasViWords = /\b(?:la|gi|nao|nhu|the|khong|co|duoc|khong|minh|ban|toi|nhe|nha|oi|giup|voi|cho|ve|cua|va|hay|sao)\b/i.test(s);
+  if (hasViWords) return 'vi';
+  if (/[a-zA-Z]/.test(s)) return 'en';
+  return fallbackLang === 'en' ? 'en' : 'vi';
+}
 
-  const textNoDia = removeVietnameseDiacritics(text);
-  const uNoDia = removeVietnameseDiacritics(uClean);
-  if (uNoDia) {
-    const regexNoDia = new RegExp('(?:^|[^\\w@])@' + escapeRegex(uNoDia) + '(?:[^\\w]|$)', 'i');
-    if (regexNoDia.test(textNoDia)) return true;
+function getSenderMeta(m, currentUserId) {
+  if (m && m.isAi) {
+    return {
+      isAi: true,
+      senderId: VIORA_AI_ID,
+      senderName: VIORA_AI_NAME,
+      senderAvatar: '',
+      isMe: false,
+    };
   }
-  return false;
+  const senderObj = m?.sender && typeof m.sender === 'object' ? m.sender : null;
+  const senderId = senderObj ? senderObj._id.toString() : (m?.sender ? m.sender.toString() : '');
+  return {
+    isAi: false,
+    senderId,
+    senderName: senderObj?.username || '',
+    senderAvatar: senderObj?.avatar || '',
+    isMe: !!(currentUserId && senderId && senderId === currentUserId.toString()),
+  };
+}
+
+async function collectConversationMemberIds(conv, targetConvId) {
+  const memberIdsSet = new Set(
+    (conv?.members || []).map(m => (m.user?._id || m.user || '').toString()).filter(Boolean)
+  );
+  const communityGroupId = conv?.communityGroup;
+  try {
+    const grpFound = communityGroupId
+      ? await Group.findById(communityGroupId).select('members owner').lean()
+      : await Group.findOne({ chatConversation: targetConvId }).select('_id members owner').lean();
+    if (grpFound) {
+      if (grpFound.owner) memberIdsSet.add(grpFound.owner.toString());
+      if (Array.isArray(grpFound.members)) {
+        for (const gm of grpFound.members) {
+          const gUid = (gm.user?._id || gm.user || '').toString();
+          if (gUid) memberIdsSet.add(gUid);
+        }
+      }
+    }
+  } catch (_) {}
+  return memberIdsSet;
+}
+
+function emitAiTypingState(io, targetConvId, memberIdsSet, isTyping) {
+  if (!io || !targetConvId) return;
+  const payload = {
+    conversationId: targetConvId.toString(),
+    userId: VIORA_AI_ID,
+    userName: VIORA_AI_NAME,
+    isTyping: !!isTyping,
+    isAi: true,
+  };
+  try {
+    io.to(targetConvId.toString()).emit('user_typing', payload);
+    for (const memberId of memberIdsSet || []) {
+      if (memberId) io.to(memberId.toString()).emit('user_typing', payload);
+    }
+  } catch (_) {}
+}
+
+async function generateAndBroadcastAiReply({
+  targetConvId,
+  triggerMessage,
+  triggerContent,
+  triggerUserId,
+  triggerUsername,
+  conv,
+  memberIdsSet,
+  isGroupChat,
+}) {
+  const io = getIO ? getIO() : null;
+  const effectiveMembers = (memberIdsSet && memberIdsSet.size > 0)
+    ? memberIdsSet
+    : await collectConversationMemberIds(conv, targetConvId);
+
+  emitAiTypingState(io, targetConvId, effectiveMembers, true);
+
+  try {
+    let speakerName = (triggerUsername || '').trim();
+    let fallbackLang = 'vi';
+
+    if (triggerUserId) {
+      try {
+        const triggerAcc = await Account.findById(triggerUserId)
+          .select('username language')
+          .lean();
+        if (triggerAcc) {
+          if (!speakerName && triggerAcc.username) speakerName = triggerAcc.username.trim();
+          if (triggerAcc.language) fallbackLang = triggerAcc.language;
+        }
+      } catch (_) {}
+    }
+
+    const otherParticipantNames = [];
+    if (conv && Array.isArray(conv.members)) {
+      for (const m of conv.members) {
+        const u = m.user;
+        const uId = (u?._id || u || '').toString();
+        if (triggerUserId && uId === triggerUserId.toString()) continue;
+        const uName = (u?.username || '').trim();
+        if (uName && !otherParticipantNames.includes(uName)) {
+          otherParticipantNames.push(uName);
+        }
+      }
+    }
+
+    const cleanPrompt = stripVioraAIMention(triggerContent);
+    const language = detectAiReplyLanguage(cleanPrompt || triggerContent, fallbackLang);
+
+    const recentDocs = await Message.find({
+      conversationId: targetConvId,
+      _id: { $ne: triggerMessage._id },
+      isRecalled: { $ne: true },
+      recipientOnlyFriends: { $ne: true },
+      type: { $in: ['text', 'image'] },
+    })
+      .populate('sender', 'username')
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(12)
+      .lean();
+
+    const history = recentDocs
+      .reverse()
+      .map(d => ({
+        isAi: !!d.isAi,
+        senderName: d.isAi ? VIORA_AI_NAME : (d.sender?.username || ''),
+        content: (d.content || '').trim(),
+      }))
+      .filter(h => h.content.length > 0 && !isImagePlaceholder(h.content));
+
+    let aiReplyText = '';
+    if (!aiService.isConfigured()) {
+      aiReplyText = language === 'en'
+        ? 'VioraAI is not configured with a Groq API key yet.'
+        : 'VioraAI chưa được cấu hình Groq API key trên máy chủ.';
+    } else {
+      try {
+        aiReplyText = await aiService.replyAsThirdPartyParticipant({
+          promptText: cleanPrompt,
+          senderName: speakerName,
+          otherParticipantNames,
+          isGroup: !!isGroupChat,
+          groupName: conv?.name || '',
+          history,
+          language,
+        });
+      } catch (aiErr) {
+        console.error('[VioraAI Groq error]:', aiErr.message);
+        aiReplyText = language === 'en'
+          ? 'Sorry, VioraAI is temporarily busy right now. Please try tagging @VioraAI again in a moment!'
+          : 'Xin lỗi, VioraAI đang hơi bận một chút. Bạn thử nhắc lại @VioraAI sau nhé!';
+      }
+    }
+
+    if (!aiReplyText || !aiReplyText.trim()) return;
+    aiReplyText = aiReplyText.trim();
+
+    const aiMessage = await Message.create({
+      conversationId: targetConvId,
+      sender: null,
+      isAi: true,
+      content: aiReplyText,
+      type: 'text',
+      repliedTo: triggerMessage._id,
+    });
+
+    await aiMessage.populate({
+      path: 'repliedTo',
+      select: 'content type call sender isAi isRecalled createdAt',
+      populate: { path: 'sender', select: 'username avatar' },
+    });
+
+    await Conversation.findByIdAndUpdate(targetConvId, {
+      lastMessage: aiMessage._id,
+      updatedAt: new Date(),
+    });
+
+    const participantIds = Array.from(effectiveMembers);
+    const aiTime = formatTime(aiMessage.createdAt);
+    const aiPayload = {
+      id: aiMessage._id.toString(),
+      conversationId: targetConvId.toString(),
+      participantIds,
+      senderId: VIORA_AI_ID,
+      senderName: VIORA_AI_NAME,
+      senderAvatar: '',
+      text: aiMessage.content,
+      type: 'text',
+      postId: null,
+      sharedPost: null,
+      attachments: [],
+      amplitudes: null,
+      duration: 0,
+      imageUrl: null,
+      location: null,
+      poll: null,
+      call: null,
+      isRecalled: false,
+      recipientOnlyFriends: false,
+      isMe: false,
+      isAi: true,
+      time: aiTime,
+      createdAt: aiMessage.createdAt,
+      replyTo: formatReplyTo(aiMessage.repliedTo, null),
+      reactions: [],
+      reaction: null,
+      myReaction: null,
+    };
+
+    if (io) {
+      io.to(targetConvId.toString()).emit('new_message', aiPayload);
+      for (const memberId of participantIds) {
+        if (memberId) {
+          io.to(memberId).emit('new_message', aiPayload);
+        }
+      }
+
+      Promise.all(participantIds.map(async (memberId) => {
+        if (!memberId) return;
+        const memberUnread = await Message.countDocuments({
+          conversationId: targetConvId,
+          sender: { $ne: memberId },
+          readBy: { $ne: memberId },
+          deletedBy: { $ne: memberId },
+          hiddenFrom: { $ne: memberId },
+        });
+        const lastMessageData = {
+          id: aiMessage._id.toString(),
+          type: 'text',
+          text: aiMessage.content,
+          attachmentsCount: 0,
+          isRecalled: false,
+          location: null,
+          isMe: false,
+          isAi: true,
+          senderId: VIORA_AI_ID,
+          senderName: VIORA_AI_NAME,
+          createdAt: aiMessage.createdAt,
+        };
+        io.to(memberId).emit('conversation_updated', {
+          conversationId: targetConvId.toString(),
+          lastMessage: aiMessage.content,
+          lastMessageData,
+          lastMessageDate: aiMessage.createdAt,
+          time: aiTime,
+          updatedAt: new Date(),
+          unread: memberUnread,
+          senderId: VIORA_AI_ID,
+          senderName: VIORA_AI_NAME,
+          isGroup: !!isGroupChat,
+        });
+      })).catch(() => {});
+    }
+  } finally {
+    emitAiTypingState(io, targetConvId, effectiveMembers, false);
+  }
+}
+
+function isImagePlaceholder(text) {
+  if (!text || typeof text !== 'string') return true;
+  const s = text.trim();
+  if (!s || s.startsWith('📷 [') || s.startsWith('http://') || s.startsWith('https://')) return true;
+  const lower = s.toLowerCase();
+  return lower === 'image' || lower === 'images' || lower === 'photo' || lower === 'photos' || lower === 'hình ảnh';
+}
+
+function isAudioMessage(m) {
+  if (!m) return false;
+  if (m.type === 'audio') return true;
+  return Array.isArray(m.attachments) && m.attachments.some((a) => {
+    if (!a || typeof a !== 'string') return false;
+    const lower = a.toLowerCase();
+    return lower.includes('.m4a') || lower.includes('.aac') || lower.includes('.mp3') || lower.includes('.wav');
+  });
+}
+
+function parseAmplitudes(raw) {
+  if (!raw) return [];
+  let arr = raw;
+  if (typeof arr === 'string') {
+    try {
+      arr = JSON.parse(arr);
+    } catch (_) {
+      return [];
+    }
+  }
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .slice(0, 64)
+    .map(v => Number(v))
+    .filter(v => Number.isFinite(v))
+    .map(v => Math.max(0, Math.min(1, Math.round(v * 1000) / 1000)));
+}
+
+function parseAudioDuration(rawDuration, contentStr) {
+  if (rawDuration != null && rawDuration !== '') {
+    const num = Number(rawDuration);
+    if (Number.isFinite(num) && num >= 0) return Math.round(num);
+  }
+  if (typeof contentStr === 'string' && contentStr.includes(':')) {
+    const parts = contentStr.trim().split(':');
+    if (parts.length === 2) {
+      const m = parseInt(parts[0], 10);
+      const s = parseInt(parts[1], 10);
+      if (!Number.isNaN(m) && !Number.isNaN(s) && m >= 0 && s >= 0) {
+        return m * 60 + s;
+      }
+    }
+  }
+  return 0;
 }
 
 const sendChatMessagePushNotifications = async ({
@@ -65,10 +370,14 @@ const sendChatMessagePushNotifications = async ({
     if (!recipientIds.length) return;
 
     const mutedUserIds = new Set();
+    const now = new Date();
     if (conv && Array.isArray(conv.members)) {
       for (const m of conv.members) {
         const mUid = (m.user?._id || m.user || '').toString();
         if (mUid && m.isMuted) {
+          if (m.mutedUntil && new Date(m.mutedUntil) < now) {
+            continue;
+          }
           mutedUserIds.add(mUid);
         }
       }
@@ -81,7 +390,10 @@ const sendChatMessagePushNotifications = async ({
     if (!recipientAccounts || !recipientAccounts.length) return;
 
     const rawContent = (message.content || cleanText || '').trim();
-    const isAll = isGroupChat && hasMentionAll(rawContent);
+    const isAll = isGroupChat && (message.mentionAll === true);
+    const explicitMentionIds = new Set(
+      (message.mentions || []).map(m => (m._id || m).toString())
+    );
     const groupName = conv?.name || '';
     const truncatedPreview = rawContent.length > 80
       ? rawContent.substring(0, 77) + '...'
@@ -97,14 +409,13 @@ const sendChatMessagePushNotifications = async ({
           );
           if (isBlocked) return;
 
-          const isSpecificMention = isMemberMentioned(rawContent, recipient.username);
+          const isSpecificMention = explicitMentionIds.has(recIdStr);
           const isMentioned = isAll || isSpecificMention;
 
           if (mutedUserIds.has(recIdStr) && !isMentioned) {
             return;
           }
 
-          // Backend only returns raw structured data - the client app handles all formatting & i18n
           const pushData = {
             type: 'message',
             senderId: userId.toString(),
@@ -127,12 +438,16 @@ const sendChatMessagePushNotifications = async ({
             : (senderUsername || 'Viora');
           const fallbackBody = truncatedPreview;
 
+          const notifImageUrl = (msgType === 'image' && primaryImageUrl)
+            ? primaryImageUrl
+            : (senderAvatar || (isGroupChat ? (conv?.avatar || '') : '') || null);
+
           await sendPushNotification({
             recipientId: recipient._id,
             title: fallbackTitle,
             body: fallbackBody,
             data: pushData,
-            imageUrl: (msgType === 'image' && primaryImageUrl) ? primaryImageUrl : null,
+            imageUrl: notifImageUrl,
           });
         } catch (singleErr) {
           console.error(`[PUSH NOTIF] Failed for recipient ${recipient._id}:`, singleErr.message);
@@ -189,8 +504,21 @@ const getUserIdFromReq = (req) => {
 
 const formatReplyTo = (repliedTo, currentUserId) => {
   if (!repliedTo) return null;
+  if (repliedTo.isAi) {
+    return {
+      id: repliedTo._id.toString(),
+      text: repliedTo.isRecalled ? 'Message has been unsent' : (repliedTo.content || ''),
+      type: repliedTo.type || 'text',
+      call: formatCall(repliedTo.call, repliedTo.type),
+      senderId: VIORA_AI_ID,
+      name: VIORA_AI_NAME,
+      isMe: false,
+      isAi: true,
+    };
+  }
   const rSender = repliedTo.sender;
-  const rIsMe = rSender && rSender._id ? rSender._id.toString() === currentUserId?.toString() : false;
+  const rSenderId = rSender?._id ? rSender._id.toString() : (rSender ? rSender.toString() : '');
+  const rIsMe = currentUserId && rSenderId ? rSenderId === currentUserId.toString() : false;
   const rName = rSender ? (rIsMe ? 'You' : rSender.username) : '';
 
   return {
@@ -198,32 +526,34 @@ const formatReplyTo = (repliedTo, currentUserId) => {
     text: repliedTo.isRecalled ? 'Message has been unsent' : (repliedTo.content || ''),
     type: repliedTo.type || 'text',
     call: formatCall(repliedTo.call, repliedTo.type),
+    senderId: rSenderId,
     name: rName,
     isMe: rIsMe,
+    isAi: false,
   };
 };
 
 const formatPinnedMessage = (pinnedMsg, currentUserId) => {
   if (!pinnedMsg) return null;
-  const pSender = pinnedMsg.sender;
-  const pSenderId = pSender && pSender._id ? pSender._id.toString() : (pSender ? pSender.toString() : '');
-  const pIsMe = currentUserId && pSenderId ? pSenderId === currentUserId.toString() : false;
-  const senderName = pSender ? (pSender.username || '') : '';
-  const senderAvatar = pSender ? (pSender.avatar || '') : '';
-  const primaryImageUrl = (pinnedMsg.attachments && pinnedMsg.attachments.length > 0)
+  const { isAi, senderId: pSenderId, senderName, senderAvatar, isMe: pIsMe } = getSenderMeta(pinnedMsg, currentUserId);
+  const isPinnedAudio = isAudioMessage(pinnedMsg);
+  const primaryImageUrl = (!isPinnedAudio && pinnedMsg.attachments && pinnedMsg.attachments.length > 0)
     ? pinnedMsg.attachments[0]
     : (pinnedMsg.type === 'image' && pinnedMsg.content && pinnedMsg.content.startsWith('http') ? pinnedMsg.content : null);
 
   return {
     id: pinnedMsg._id ? pinnedMsg._id.toString() : (pinnedMsg.id || '').toString(),
     text: pinnedMsg.isRecalled ? 'Message has been unsent' : (pinnedMsg.content || ''),
-    type: pinnedMsg.type || 'text',
+    type: isPinnedAudio ? 'audio' : (pinnedMsg.type || 'text'),
     attachments: pinnedMsg.attachments || [],
+    amplitudes: Array.isArray(pinnedMsg.amplitudes) && pinnedMsg.amplitudes.length > 0 ? pinnedMsg.amplitudes : null,
+    duration: pinnedMsg.duration || parseAudioDuration(null, pinnedMsg.content),
     imageUrl: primaryImageUrl,
     location: formatLocation(pinnedMsg.location, pinnedMsg.type),
     poll: formatPoll(pinnedMsg.poll),
     call: formatCall(pinnedMsg.call, pinnedMsg.type),
     isMe: pIsMe,
+    isAi,
     isRecalled: pinnedMsg.isRecalled || false,
     senderId: pSenderId,
     senderName,
@@ -351,11 +681,11 @@ const reconcileActiveCallMessages = async (messages) => {
         m.call.duration = checked.duration || 0;
         const isVideo = checked.type === 'video';
         if (checked.status === 'completed') {
-          m.content = isVideo ? 'Cuộc gọi video' : 'Cuộc gọi thoại';
+          m.content = isVideo ? 'Video call' : 'Voice call';
         } else if (checked.status === 'declined') {
-          m.content = isVideo ? 'Cuộc gọi video đã bị từ chối' : 'Cuộc gọi thoại đã bị từ chối';
+          m.content = isVideo ? 'Declined video call' : 'Declined voice call';
         } else if (checked.status === 'missed' || checked.status === 'cancelled') {
-          m.content = isVideo ? 'Cuộc gọi video nhỡ' : 'Cuộc gọi nhỡ';
+          m.content = isVideo ? 'Missed video call' : 'Missed voice call';
         }
       }
     } catch (_) {}
@@ -382,12 +712,12 @@ const getConversations = async (req, res) => {
         .populate('communityGroup', 'name avatar membersCount description')
         .populate({
           path: 'pinnedMessage',
-          select: 'content type attachments location poll call sender isRecalled createdAt',
+          select: 'content type attachments location poll call sender isAi isRecalled createdAt',
           populate: { path: 'sender', select: 'username avatar' },
         })
         .populate({
           path: 'pinnedMessages',
-          select: 'content type attachments location poll call sender isRecalled createdAt',
+          select: 'content type attachments location poll call sender isAi isRecalled createdAt',
           populate: { path: 'sender', select: 'username avatar' },
         })
         .sort({ updatedAt: -1 }),
@@ -404,19 +734,29 @@ const getConversations = async (req, res) => {
     const formatted = [];
 
     for (const conv of conversations) {
+      const currentMember = (conv.members || []).find(
+        m => (m.user?._id || m.user || '').toString() === userId.toString()
+      );
+      const clearedAt = currentMember?.clearedAt ? new Date(currentMember.clearedAt) : null;
+
       const CONV_PREVIEW_MESSAGE_LIMIT = 15;
-      let rawConvMessages = await Message.find({
+      const convMsgFilter = {
         conversationId: conv._id,
         deletedBy: { $ne: userId },
         hiddenFrom: { $ne: userId },
         type: { $ne: 'system' },
-      })
+      };
+      if (clearedAt && !isNaN(clearedAt.getTime())) {
+        convMsgFilter.createdAt = { $gt: clearedAt };
+      }
+
+      let rawConvMessages = await Message.find(convMsgFilter)
         .populate('sender', 'username avatar')
         .populate('readBy', 'username avatar')
         .populate('poll.options.voterIds', 'username avatar')
         .populate({
           path: 'repliedTo',
-          select: 'content type call sender isRecalled createdAt',
+          select: 'content type call sender isAi isRecalled createdAt',
           populate: { path: 'sender', select: 'username avatar' },
         })
         .sort({ createdAt: -1, _id: -1 })
@@ -491,19 +831,20 @@ const getConversations = async (req, res) => {
       }
 
       const formattedMessages = messages.map(m => {
-        const senderObj = m.sender && typeof m.sender === 'object' ? m.sender : null;
-        const senderId = senderObj ? senderObj._id.toString() : (m.sender ? m.sender.toString() : '');
-        const isMe = senderId === (userId ? userId.toString() : '');
+        const { isAi, senderId, senderName, senderAvatar, isMe } = getSenderMeta(m, userId);
 
-        const primaryImageUrl = (m.attachments && m.attachments.length > 0)
+        const isMsgAudio = isAudioMessage(m);
+        const primaryImageUrl = (!isMsgAudio && m.attachments && m.attachments.length > 0)
           ? m.attachments[0]
           : (m.type === 'image' && m.content && m.content.startsWith('http') ? m.content : null);
 
         return {
           id: m._id.toString(),
           text: m.isRecalled ? 'Message has been unsent' : m.content,
-          type: m.type || 'text',
+          type: isMsgAudio ? 'audio' : (m.type || 'text'),
           attachments: m.attachments || [],
+          amplitudes: Array.isArray(m.amplitudes) && m.amplitudes.length > 0 ? m.amplitudes : null,
+          duration: m.duration || parseAudioDuration(null, m.content),
           imageUrl: primaryImageUrl,
           location: formatLocation(m.location, m.type),
           poll: formatPoll(m.poll),
@@ -511,9 +852,10 @@ const getConversations = async (req, res) => {
           isRecalled: m.isRecalled || false,
           recipientOnlyFriends: !!m.recipientOnlyFriends,
           isMe,
+          isAi,
           senderId,
-          senderName: senderObj?.username || '',
-          senderAvatar: senderObj?.avatar || '',
+          senderName,
+          senderAvatar,
           time: formatTime(m.createdAt),
           createdAt: m.createdAt,
           replyTo: formatReplyTo(m.repliedTo, userId),
@@ -536,26 +878,31 @@ const getConversations = async (req, res) => {
       let lastMsgText = '';
       if (lastMsg) {
         let senderObj = null;
-        if (lastMsg.sender && typeof lastMsg.sender === 'object') {
-          senderObj = lastMsg.sender;
-        } else if (lastMsg.sender) {
-          const matchSender = (conv.members || []).find(m => m.user && m.user._id && m.user._id.toString() === lastMsg.sender.toString());
-          if (matchSender) senderObj = matchSender.user;
+        if (!lastMsg.isAi) {
+          if (lastMsg.sender && typeof lastMsg.sender === 'object') {
+            senderObj = lastMsg.sender;
+          } else if (lastMsg.sender) {
+            const matchSender = (conv.members || []).find(m => m.user && m.user._id && m.user._id.toString() === lastMsg.sender.toString());
+            if (matchSender) senderObj = matchSender.user;
+          }
+
+          if (!senderObj && lastMsg.sender) {
+            try {
+              const senderIdToFind = lastMsg.sender._id || lastMsg.sender;
+              senderObj = await Account.findById(senderIdToFind).select('username avatar').lean();
+            } catch (_) {}
+          }
         }
 
-        if (!senderObj && lastMsg.sender) {
-          try {
-            const senderIdToFind = lastMsg.sender._id || lastMsg.sender;
-            senderObj = await Account.findById(senderIdToFind).select('username avatar').lean();
-          } catch (_) {}
-        }
-
-        let senderId = senderObj ? senderObj._id.toString() : (lastMsg.sender ? (lastMsg.sender._id || lastMsg.sender).toString() : '');
-        let isMsgFromMe = senderId === (userId ? userId.toString() : '');
-        let senderName = senderObj?.username || '';
-        const imgCount = (lastMsg.attachments && lastMsg.attachments.length) || (lastMsg.type === 'image' ? 1 : 0);
+        const isLastAi = !!lastMsg.isAi;
+        let senderId = isLastAi
+          ? VIORA_AI_ID
+          : (senderObj ? senderObj._id.toString() : (lastMsg.sender ? (lastMsg.sender._id || lastMsg.sender).toString() : ''));
+        let isMsgFromMe = !isLastAi && senderId === (userId ? userId.toString() : '');
+        let senderName = isLastAi ? VIORA_AI_NAME : (senderObj?.username || '');
+        const imgCount = (lastMsg.type === 'image') ? ((lastMsg.attachments && lastMsg.attachments.length) || 1) : 0;
         const content = (lastMsg.content || '').trim();
-        const hasCaption = content && content.toLowerCase() !== 'image' && content !== '📷 [Image]' && content.toLowerCase() !== 'hình ảnh' && content !== '📷 [Hình ảnh]' && !content.startsWith('http');
+        const hasCaption = content && !isImagePlaceholder(content);
 
         let formattedPollForLastMsg = null;
         if (lastMsg.type === 'poll' || lastMsg.poll) {
@@ -578,8 +925,10 @@ const getConversations = async (req, res) => {
           isRecalled: lastMsg.isRecalled || false,
           location: formatLocation(lastMsg.location, lastMsg.type),
           poll: formattedPollForLastMsg || formatPoll(lastMsg.poll),
+          pollAction: formattedPollForLastMsg?.lastVote?.action || '',
           call: formatCall(lastMsg.call, lastMsg.type),
           isMe: isMsgFromMe,
+          isAi: isLastAi,
           senderId: senderId,
           senderName: senderName,
           createdAt: lastMsg.createdAt,
@@ -588,27 +937,21 @@ const getConversations = async (req, res) => {
         if (lastMsg.type === 'poll') {
           if (formattedPollForLastMsg?.lastVote) {
             const lv = formattedPollForLastMsg.lastVote;
-            if (lv.action === 'unvoted') {
-              lastMsgText = 'đã huỷ bình chọn';
-            } else if (lv.optionText) {
-              lastMsgText = `Đã chọn "${lv.optionText}"`;
-            } else {
-              lastMsgText = 'đã bình chọn';
-            }
+            lastMsgText = lv.optionText ? `"${lv.optionText}"` : (formattedPollForLastMsg.question || '[Poll]');
           } else {
-            lastMsgText = `[Bình chọn] ${formattedPollForLastMsg?.question || lastMsg.content || ''}`;
+            lastMsgText = formattedPollForLastMsg?.question || lastMsg.content || '[Poll]';
           }
         } else if (lastMsg.type === 'call') {
           const isVid = lastMsg.call?.callType === 'video';
           const st = lastMsg.call?.status;
           if (st === 'ringing' || st === 'ongoing') {
-            lastMsgText = isVid ? 'Cuộc gọi video đang diễn ra' : 'Cuộc gọi thoại đang diễn ra';
+            lastMsgText = isVid ? 'Video call ongoing' : 'Voice call ongoing';
           } else if (st === 'missed' || (st === 'cancelled' && !isMsgFromMe)) {
-            lastMsgText = isVid ? 'Cuộc gọi video nhỡ' : 'Cuộc gọi nhỡ';
+            lastMsgText = isVid ? 'Missed video call' : 'Missed voice call';
           } else if (st === 'declined') {
-            lastMsgText = isVid ? 'Cuộc gọi video đã bị từ chối' : 'Cuộc gọi thoại đã bị từ chối';
+            lastMsgText = isVid ? 'Declined video call' : 'Declined voice call';
           } else {
-            lastMsgText = isVid ? 'Cuộc gọi video' : 'Cuộc gọi thoại';
+            lastMsgText = isVid ? 'Video call' : 'Voice call';
           }
         } else {
           lastMsgText = hasCaption ? content : (lastMsg.type === 'image' ? '' : content);
@@ -630,6 +973,12 @@ const getConversations = async (req, res) => {
 
       const lastMsgDate = lastMsg?.createdAt || conv.updatedAt || conv.createdAt || new Date(0);
 
+      const myMember = (conv.members || []).find(
+        m => (m.user?._id || m.user || '').toString() === userId.toString()
+      );
+      const isMuted = !!(myMember?.isMuted && (!myMember.mutedUntil || new Date(myMember.mutedUntil) > new Date()));
+      const mutedUntil = myMember?.mutedUntil || null;
+
       formatted.push({
         id: conv._id.toString(),
         name,
@@ -645,11 +994,15 @@ const getConversations = async (req, res) => {
         isGroup,
         isFriend,
         isBlocked: !!isThisBlocked,
+        isMuted,
+        mutedUntil,
         otherUserId,
         pinnedMessage: formatPinnedMessage(conv.pinnedMessage, userId),
         pinnedMessages: (conv.pinnedMessages || []).map(m => formatPinnedMessage(m, userId)).filter(Boolean),
         hasMoreMessages,
         messages: formattedMessages,
+        quickEmoji: conv.quickEmoji || '👍',
+        customEmojis: conv.customEmojis || [],
       });
     }
 
@@ -668,11 +1021,24 @@ const getConversations = async (req, res) => {
 const sendMessage = async (req, res) => {
   try {
     const userId = getUserIdFromReq(req);
-    let { conversationId, content, receiverId, replyToId, repliedToMessageId, type, location, images, attachments } = req.body;
+    let { conversationId, content, receiverId, replyToId, repliedToMessageId, type, location, images, attachments, mentionAll, mentionAi, mentions, postId, amplitudes, duration } = req.body;
+
+    const isMentionAll = (mentionAll === true || mentionAll === 'true');
+    let rawMentionIds = [];
+    if (Array.isArray(mentions)) {
+      rawMentionIds = mentions.map(id => (id ? id.toString().trim() : '')).filter(Boolean);
+    } else if (typeof mentions === 'string') {
+      try {
+        const parsed = JSON.parse(mentions);
+        if (Array.isArray(parsed)) rawMentionIds = parsed.map(id => (id ? id.toString().trim() : '')).filter(Boolean);
+      } catch (_) {
+        if (mentions.trim()) rawMentionIds = [mentions.trim()];
+      }
+    }
+    const mentionUserIds = rawMentionIds.filter(id => mongoose.Types.ObjectId.isValid(id));
 
     let imageUrls = [];
 
-    // 1. Files uploaded via Multer Cloudinary storage
     if (req.files && Array.isArray(req.files) && req.files.length > 0) {
       for (const file of req.files) {
         if (file.path) {
@@ -683,7 +1049,6 @@ const sendMessage = async (req, res) => {
       }
     }
 
-    // 2. Base64 strings or URLs in body
     let rawImages = images || attachments;
     if (typeof rawImages === 'string') {
       try {
@@ -737,12 +1102,13 @@ const sendMessage = async (req, res) => {
         if (pollData.options.length < 2) pollData = null;
       }
     }
+    const isAudio = type === 'audio';
     const isPoll = type === 'poll' && pollData != null;
-    const isImage = imageUrls.length > 0 || type === 'image';
+    const isImage = !isAudio && (imageUrls.length > 0 || type === 'image');
     const isLocation = type === 'location' && location && (location.latitude != null || location.longitude != null);
-    const finalContent = (content && content.trim()) || (isLocation ? (location?.name || location?.address || '') : (isPoll ? pollData.question : (isImage ? '' : '')));
+    const finalContent = (content && content.trim()) || (isLocation ? (location?.name || location?.address || '') : (isPoll ? pollData.question : (isImage ? '' : (isAudio ? '0:00' : ''))));
 
-    if (!finalContent && !isLocation && !isImage && !isPoll) {
+    if (!finalContent && !isLocation && !isImage && !isPoll && !isAudio) {
       return res.status(400).json({ success: false, code: 'MESSAGE_CONTENT_REQUIRED', message: 'Message content cannot be empty' });
     }
 
@@ -858,12 +1224,10 @@ const sendMessage = async (req, res) => {
           const isSenderBlocked = Array.isArray(receiverAcc.blockedUsers) &&
             receiverAcc.blockedUsers.some(b => (b._id || b).toString() === userId.toString());
 
-          // Case 1: Friend who is blocked by receiver
           if (isSenderBlocked && (isSenderFriend || isSenderBlockedFriend)) {
             isBlockedByReceiver = true;
           }
 
-          // Case 2: Stranger when receiver only allows friends to message, OR stranger who is blocked
           if ((receiverWhoCanMessage === 'friends' && !isSenderFriend && !isSenderBlockedFriend) ||
               (isSenderBlocked && !isSenderFriend && !isSenderBlockedFriend)) {
             isRecipientOnlyFriends = true;
@@ -873,7 +1237,7 @@ const sendMessage = async (req, res) => {
       }
     }
 
-    const msgType = isLocation ? 'location' : (isImage ? 'image' : (isPoll ? 'poll' : (type || 'text')));
+    const msgType = isLocation ? 'location' : (isAudio ? 'audio' : (isImage ? 'image' : (isPoll ? 'poll' : (type || 'text'))));
 
     if (isLocation && location && location.isLive !== false) {
       await Message.updateMany(
@@ -903,12 +1267,17 @@ const sendMessage = async (req, res) => {
       } catch (_) {}
     }
 
+    const parsedAmplitudes = isAudio ? parseAmplitudes(amplitudes) : [];
+    const parsedDuration = isAudio ? parseAudioDuration(duration, finalContent) : 0;
+
     const messageData = {
       conversationId: targetConvId,
       sender: userId,
       content: finalContent,
       type: msgType,
       attachments: imageUrls,
+      duration: parsedDuration,
+      amplitudes: parsedAmplitudes,
       poll: isPoll ? pollData : null,
       location: isLocation ? {
         latitude: Number(location.latitude) || 0,
@@ -919,6 +1288,9 @@ const sendMessage = async (req, res) => {
         status: location.status || 'active',
       } : null,
       recipientOnlyFriends: isRecipientOnlyFriends,
+      mentionAll: isMentionAll,
+      mentions: mentionUserIds,
+      postId: postId ? postId.toString() : null,
       deletedBy: (isRecipientOnlyFriends && receiverIdForBlock) ? [receiverIdForBlock] : [],
       hiddenFrom: (isBlockedByReceiver && !isRecipientOnlyFriends && receiverIdForBlock) ? [receiverIdForBlock] : [],
     };
@@ -962,6 +1334,31 @@ const sendMessage = async (req, res) => {
       ? message.attachments[0]
       : (message.type === 'image' && message.content && message.content.startsWith('http') ? message.content : null);
 
+    let sharedPostData = null;
+    if (message.postId) {
+      try {
+        const p = await Post.findById(message.postId)
+          .populate('author', 'username avatar')
+          .populate('group', 'name avatar')
+          .lean();
+        if (p) {
+          const isAnon = p.isAnonymous === true;
+          sharedPostData = {
+            id: p._id.toString(),
+            _id: p._id.toString(),
+            content: p.content || '',
+            isAnonymous: isAnon,
+            authorName: isAnon ? '' : (p.author?.username || ''),
+            authorAvatar: isAnon ? '' : (p.author?.avatar || ''),
+            groupName: p.group?.name || '',
+            groupAvatar: p.group?.avatar || '',
+          };
+        }
+      } catch (err) {
+        console.error('sendMessage fetch sharedPost error:', err);
+      }
+    }
+
     const resultData = {
       id: message._id.toString(),
       conversationId: targetConvId.toString(),
@@ -970,7 +1367,11 @@ const sendMessage = async (req, res) => {
       senderAvatar: senderObj?.avatar || '',
       text: message.content,
       type: message.type || 'text',
+      postId: message.postId || null,
+      sharedPost: sharedPostData,
       attachments: message.attachments || [],
+      amplitudes: Array.isArray(message.amplitudes) && message.amplitudes.length > 0 ? message.amplitudes : null,
+      duration: message.duration || 0,
       imageUrl: primaryImageUrl,
       location: formatLocation(message.location, message.type),
       poll: formatPoll(message.poll),
@@ -978,6 +1379,7 @@ const sendMessage = async (req, res) => {
       isRecalled: false,
       recipientOnlyFriends: isRecipientOnlyFriends,
       isMe: true,
+      isAi: false,
       time: formatTime(message.createdAt),
       createdAt: message.createdAt,
       replyTo: replyToData,
@@ -985,6 +1387,21 @@ const sendMessage = async (req, res) => {
       reaction: null,
       myReaction: null,
     };
+
+    const conv = await Conversation.findById(targetConvId)
+      .select('members type name avatar communityGroup')
+      .populate('members.user', 'username avatar language');
+    const isGroupChat = conv?.type === 'group_chat';
+    const memberIdsSet = conv
+      ? await collectConversationMemberIds(conv, targetConvId)
+      : new Set([userId?.toString()].filter(Boolean));
+    let senderUsername = senderObj?.username || '';
+    if (!senderUsername && userId) {
+      try {
+        const acc = await Account.findById(userId).select('username').lean();
+        if (acc) senderUsername = acc.username || '';
+      } catch (_) {}
+    }
 
     try {
       const io = getIO ? getIO() : null;
@@ -995,52 +1412,13 @@ const sendMessage = async (req, res) => {
           io.to(userId.toString()).emit('new_message', resultData);
         }
 
-        const conv = await Conversation.findById(targetConvId).select('members type name avatar communityGroup');
         if (conv) {
-          const isGroupChat = conv.type === 'group_chat';
-          let senderUsername = senderObj?.username || '';
-          if (!senderUsername) {
-            try {
-              const acc = await Account.findById(userId).select('username').lean();
-              if (acc) senderUsername = acc.username || '';
-            } catch (_) {}
-          }
-          const imgCount = (message.attachments && message.attachments.length) || (msgType === 'image' ? 1 : 0);
+          const imgCount = (msgType === 'image') ? ((message.attachments && message.attachments.length) || 1) : 0;
           const content = (finalContent || '').trim();
-          const hasCaption = content && content.toLowerCase() !== 'image' && content !== '📷 [Image]' && content.toLowerCase() !== 'hình ảnh' && content !== '📷 [Hình ảnh]' && !content.startsWith('http');
+          const hasCaption = content && !isImagePlaceholder(content);
           const cleanText = hasCaption ? content : (msgType === 'image' ? '' : content);
+          const primaryImageUrlForNotif = (msgType === 'image' && imageUrls.length > 0) ? imageUrls[0] : null;
 
-          const memberIdsSet = new Set((conv.members || []).map(m => (m.user?._id || m.user || '').toString()).filter(Boolean));
-          let communityGroupId = conv.communityGroup;
-          if (!communityGroupId) {
-            try {
-              const grpFound = await Group.findOne({ chatConversation: targetConvId }).select('_id members owner').lean();
-              if (grpFound) {
-                if (grpFound.owner) memberIdsSet.add(grpFound.owner.toString());
-                if (grpFound.members) {
-                  for (const gm of grpFound.members) {
-                    const gUid = (gm.user?._id || gm.user || '').toString();
-                    if (gUid) memberIdsSet.add(gUid);
-                  }
-                }
-              }
-            } catch (_) {}
-          } else {
-            try {
-              const grpFound = await Group.findById(communityGroupId).select('members owner').lean();
-              if (grpFound) {
-                if (grpFound.owner) memberIdsSet.add(grpFound.owner.toString());
-                if (grpFound.members) {
-                  for (const gm of grpFound.members) {
-                    const gUid = (gm.user?._id || gm.user || '').toString();
-                    if (gUid) memberIdsSet.add(gUid);
-                  }
-                }
-              }
-            } catch (_) {}
-          }
-
-          // Emit new_message to all conversation members instantly (0ms)
           for (const memberId of memberIdsSet) {
             if (memberId && memberId !== userId.toString()) {
               if (isBlockedByReceiver) continue;
@@ -1048,7 +1426,6 @@ const sendMessage = async (req, res) => {
             }
           }
 
-          // Emit conversation_updated in parallel using Promise.all (non-blocking)
           Promise.all(Array.from(memberIdsSet).map(async (memberId) => {
             if (!memberId) return;
             if (isBlockedByReceiver && memberId.toString() !== userId.toString()) return;
@@ -1067,8 +1444,9 @@ const sendMessage = async (req, res) => {
               text: cleanText,
               attachmentsCount: imgCount,
               isRecalled: false,
-              location: locObj,
+              location: resultData.location,
               isMe: isMemberMe,
+              isAi: false,
               senderId: userId.toString(),
               senderName: senderUsername,
               createdAt: message.createdAt,
@@ -1088,7 +1466,6 @@ const sendMessage = async (req, res) => {
             });
           })).catch(() => {});
 
-          // Trigger push notifications for chat message and mentions in background
           sendChatMessagePushNotifications({
             conv,
             isGroupChat,
@@ -1100,7 +1477,7 @@ const sendMessage = async (req, res) => {
             message,
             msgType,
             cleanText,
-            primaryImageUrl,
+            primaryImageUrl: primaryImageUrlForNotif,
             isBlockedByReceiver,
           }).catch((err) => {
             console.error('[PUSH NOTIF] sendChatMessagePushNotifications error:', err);
@@ -1108,6 +1485,29 @@ const sendMessage = async (req, res) => {
         }
       }
     } catch (_) {}
+
+    const mentionedAiFromField = mentionAi === true || mentionAi === 'true' ||
+      rawMentionIds.some(id => id.toLowerCase() === VIORA_AI_ID);
+    const shouldTriggerVioraAI =
+      !isBlockedByReceiver &&
+      !isRecipientOnlyFriends &&
+      (msgType === 'text' || (msgType === 'image' && !!finalContent)) &&
+      (mentionedAiFromField || containsVioraAIMention(finalContent));
+
+    if (shouldTriggerVioraAI) {
+      generateAndBroadcastAiReply({
+        targetConvId,
+        triggerMessage: message,
+        triggerContent: finalContent,
+        triggerUserId: userId,
+        triggerUsername: senderUsername,
+        conv,
+        memberIdsSet,
+        isGroupChat,
+      }).catch((err) => {
+        console.error('[VioraAI 3rd-party reply error]:', err);
+      });
+    }
 
     return res.status(201).json({
       success: true,
@@ -1303,12 +1703,21 @@ const loadMessage = async (req, res) => {
       } catch (_) {}
     }
 
+    const myMemberInConv = (conv?.members || []).find(m => {
+      const uId = (m.user?._id || m.user)?.toString();
+      return uId === userId?.toString();
+    });
+    const clearedAtDate = myMemberInConv?.clearedAt ? new Date(myMemberInConv.clearedAt) : null;
+
     const msgFilter = {
       conversationId,
       deletedBy: { $ne: userId },
       hiddenFrom: { $ne: userId },
       type: { $ne: 'system' },
     };
+    if (clearedAtDate && !isNaN(clearedAtDate.getTime())) {
+      msgFilter.createdAt = { $gt: clearedAtDate };
+    }
     if (before) {
       const beforeDate = new Date(before);
       if (!isNaN(beforeDate.getTime())) {
@@ -1392,10 +1801,34 @@ const loadMessage = async (req, res) => {
       }
     }
 
+    const postIds = [...new Set(messages.map(m => m.postId ? m.postId.toString() : null).filter(Boolean))];
+    const postMap = new Map();
+    if (postIds.length > 0) {
+      try {
+        const posts = await Post.find({ _id: { $in: postIds } })
+          .populate('author', 'username avatar')
+          .populate('group', 'name avatar')
+          .lean();
+        for (const p of posts) {
+          const isAnon = p.isAnonymous === true;
+          postMap.set(p._id.toString(), {
+            id: p._id.toString(),
+            _id: p._id.toString(),
+            content: p.content || '',
+            isAnonymous: isAnon,
+            authorName: isAnon ? '' : (p.author?.username || ''),
+            authorAvatar: isAnon ? '' : (p.author?.avatar || ''),
+            groupName: p.group?.name || '',
+            groupAvatar: p.group?.avatar || '',
+          });
+        }
+      } catch (err) {
+        console.error('loadMessage populate posts error:', err);
+      }
+    }
+
     const formatted = messages.map(m => {
-      const senderObj = m.sender && typeof m.sender === 'object' ? m.sender : null;
-      const senderId = senderObj ? senderObj._id.toString() : (m.sender ? m.sender.toString() : '');
-      const isMe = senderId === (userId ? userId.toString() : '');
+      const { isAi, senderId, senderName, senderAvatar, isMe } = getSenderMeta(m, userId);
 
       const rawSeen = (m.readBy || [])
         .filter(r => {
@@ -1425,15 +1858,22 @@ const loadMessage = async (req, res) => {
         createdAt: r.createdAt,
       }));
 
-      const primaryImageUrl = (m.attachments && m.attachments.length > 0)
+      const isMsgAudio = isAudioMessage(m);
+      const primaryImageUrl = (!isMsgAudio && m.attachments && m.attachments.length > 0)
         ? m.attachments[0]
         : (m.type === 'image' && m.content && m.content.startsWith('http') ? m.content : null);
+
+      const sharedPost = (m.postId && postMap.has(m.postId.toString())) ? postMap.get(m.postId.toString()) : null;
 
       return {
         id: m._id.toString(),
         text: m.isRecalled ? 'Message has been unsent' : m.content,
-        type: m.type || 'text',
+        type: isMsgAudio ? 'audio' : (m.type || 'text'),
+        postId: m.postId || null,
+        sharedPost: sharedPost,
         attachments: m.attachments || [],
+        amplitudes: Array.isArray(m.amplitudes) && m.amplitudes.length > 0 ? m.amplitudes : null,
+        duration: m.duration || parseAudioDuration(null, m.content),
         imageUrl: primaryImageUrl,
         location: formatLocation(m.location, m.type),
         poll: formatPoll(m.poll),
@@ -1441,9 +1881,10 @@ const loadMessage = async (req, res) => {
         isRecalled: m.isRecalled || false,
         recipientOnlyFriends: !!m.recipientOnlyFriends,
         isMe,
+        isAi,
         senderId,
-        senderName: senderObj?.username || '',
-        senderAvatar: senderObj?.avatar || '',
+        senderName,
+        senderAvatar,
         time: formatTime(m.createdAt),
         createdAt: m.createdAt,
         replyTo: formatReplyTo(m.repliedTo, userId),
@@ -1529,6 +1970,12 @@ const loadMessage = async (req, res) => {
       } catch (_) {}
     }
 
+    const myMember = (conv?.members || []).find(
+      m => (m.user?._id || m.user || '').toString() === (userId ? userId.toString() : '')
+    );
+    const isMuted = !!(myMember?.isMuted && (!myMember.mutedUntil || new Date(myMember.mutedUntil) > new Date()));
+    const mutedUntil = myMember?.mutedUntil || null;
+
     return res.status(200).json({
       success: true,
       data: formatted,
@@ -1542,7 +1989,11 @@ const loadMessage = async (req, res) => {
       isBlocked,
       isBlockedByOther,
       otherUser,
+      isMuted,
+      mutedUntil,
       activeCall: activeCallSummary,
+      quickEmoji: conv ? (conv.quickEmoji || '👍') : '👍',
+      customEmojis: conv ? (conv.customEmojis || []) : [],
     });
   } catch (error) {
     console.error('loadMessage error:', error);
@@ -1601,7 +2052,7 @@ const recallMessage = async (req, res) => {
       return res.status(404).json({ success: false, code: 'MESSAGE_NOT_FOUND', message: 'Message not found' });
     }
 
-    if (userId && message.sender.toString() !== userId.toString()) {
+    if (userId && (!message.sender || message.sender.toString() !== userId.toString())) {
       return res.status(403).json({ success: false, code: 'CANNOT_UNSEND_OTHER_MESSAGE', message: 'You can only unsend your own messages' });
     }
 
@@ -1685,9 +2136,9 @@ const pinMessage = async (req, res) => {
           pinnedMessage: pinnedData,
           pinnedMessages: pinnedMessagesData,
         };
-        // Emit to conversation room (for users active in chat)
+
         io.to(targetConvId.toString()).emit('message_pinned', payload);
-        // Also emit directly to all member user rooms so anyone online receives it instantly
+
         for (const m of (updatedConv?.members || [])) {
           const mId = (m.user?._id || m.user || '').toString();
           if (mId) {
@@ -1735,7 +2186,7 @@ const unPinMessage = async (req, res) => {
     let updatedConv = null;
     if (convId) {
       if (messageId) {
-        // Remove specific message from pinnedMessages
+
         updatedConv = await Conversation.findByIdAndUpdate(
           convId,
           { $pull: { pinnedMessages: messageId } },
@@ -1750,7 +2201,7 @@ const unPinMessage = async (req, res) => {
         const latestPinnedId = remaining.length > 0 ? remaining[remaining.length - 1]._id : null;
         await Conversation.findByIdAndUpdate(convId, { $set: { pinnedMessage: latestPinnedId } });
       } else {
-        // Unpin all messages in conversation
+
         updatedConv = await Conversation.findByIdAndUpdate(
           convId,
           { $set: { pinnedMessage: null, pinnedMessages: [] } },
@@ -1771,9 +2222,9 @@ const unPinMessage = async (req, res) => {
           pinnedMessage: latestPinned,
           pinnedMessages: pinnedMessagesData,
         };
-        // Emit to conversation room (for users active in chat)
+
         io.to(convId.toString()).emit('message_unpinned', payload);
-        // Also emit directly to all member user rooms so anyone online receives it instantly
+
         for (const m of (updatedConv?.members || [])) {
           const mId = (m.user?._id || m.user || '').toString();
           if (mId) {
@@ -1900,7 +2351,7 @@ const editMessage = async (req, res) => {
       return res.status(404).json({ success: false, code: 'MESSAGE_NOT_FOUND', message: 'Message not found' });
     }
 
-    if (message.sender.toString() !== userId?.toString()) {
+    if (!message.sender || message.sender.toString() !== userId?.toString()) {
       return res.status(403).json({ success: false, code: 'CANNOT_EDIT_OTHER_MESSAGE', message: 'You do not have permission to edit this message' });
     }
 
@@ -2109,7 +2560,7 @@ const votePoll = async (req, res) => {
     let action = 'voted';
     if (hasVotedThis) {
       action = 'unvoted';
-      // Toggle unvote
+
       targetOption.voterIds = targetOption.voterIds.filter(id => (id._id ? id._id.toString() : id.toString()) !== userStr);
     } else {
       if (hadVotedBefore) {
@@ -2118,7 +2569,7 @@ const votePoll = async (req, res) => {
         action = 'voted';
       }
       if (!poll.multipleAnswers) {
-        // Single choice: remove user from all other options
+
         for (const opt of poll.options) {
           opt.voterIds = (opt.voterIds || []).filter(id => (id._id ? id._id.toString() : id.toString()) !== userStr);
         }
@@ -2141,7 +2592,6 @@ const votePoll = async (req, res) => {
     message.markModified('createdAt');
     await message.save();
 
-    // Guarantee that createdAt, updatedAt, and poll are updated in MongoDB collection directly
     await Message.collection.updateOne(
       { _id: message._id },
       {
@@ -2153,7 +2603,6 @@ const votePoll = async (req, res) => {
       }
     );
 
-    // Update conversation's lastMessage to this poll so it is at the bottom of the list
     if (message.conversationId) {
       await Conversation.findByIdAndUpdate(message.conversationId, {
         lastMessage: message._id,
@@ -2172,9 +2621,7 @@ const votePoll = async (req, res) => {
 
     const formattedPoll = formatPoll(pollToFormat);
     const chosenOptText = targetOption.text || '';
-    const pollPreviewText = action === 'unvoted'
-      ? 'đã huỷ bình chọn'
-      : (chosenOptText ? `Đã chọn "${chosenOptText}"` : 'đã bình chọn');
+    const pollPreviewText = chosenOptText ? `"${chosenOptText}"` : (formattedPoll?.question || '[Poll]');
 
     const payload = {
       messageId: message._id.toString(),
@@ -2237,6 +2684,9 @@ const votePoll = async (req, res) => {
                 type: 'poll',
                 text: pollPreviewText,
                 poll: formattedPoll,
+                pollAction: action,
+                action: action,
+                optionText: chosenOptText,
                 isMe: memberId === userStr,
                 senderId: userStr,
                 senderName: voterName,
@@ -2260,6 +2710,265 @@ const votePoll = async (req, res) => {
   }
 };
 
+const muteConversation = async (req, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, code: 'UNAUTHORIZED', message: 'Please sign in' });
+    }
+    const { conversationId, receiverId, duration } = req.body;
+    let conv = null;
+    if (conversationId && mongoose.Types.ObjectId.isValid(conversationId)) {
+      conv = await Conversation.findById(conversationId);
+    }
+    if (!conv && receiverId) {
+      conv = await Conversation.findOne({
+        type: 'direct',
+        $and: [
+          { 'members.user': userId },
+          { 'members.user': receiverId }
+        ]
+      });
+    }
+    if (!conv) {
+      return res.status(404).json({ success: false, code: 'CONVERSATION_NOT_FOUND', message: 'Conversation not found' });
+    }
+
+    const memberIndex = (conv.members || []).findIndex(
+      m => (m.user?._id || m.user || '').toString() === userId.toString()
+    );
+    if (memberIndex === -1) {
+      return res.status(403).json({ success: false, code: 'NOT_A_MEMBER', message: 'You are not a member of this conversation' });
+    }
+
+    const isUnmute = duration === 0 || duration === '0' || duration === false;
+    let mutedUntil = null;
+    let isMuted = false;
+
+    if (!isUnmute) {
+      isMuted = true;
+      const durNum = parseInt(duration, 10);
+      if (!isNaN(durNum) && durNum > 0) {
+        mutedUntil = new Date(Date.now() + durNum * 60 * 1000);
+      } else {
+        mutedUntil = null;
+      }
+    }
+
+    conv.members[memberIndex].isMuted = isMuted;
+    conv.members[memberIndex].mutedUntil = mutedUntil;
+    await conv.save();
+
+    const io = getIO ? getIO() : null;
+    if (io) {
+      io.to(userId.toString()).emit('conversation_mute_updated', {
+        conversationId: conv._id.toString(),
+        isMuted,
+        mutedUntil,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: isMuted ? 'Conversation muted successfully' : 'Conversation unmuted successfully',
+      isMuted,
+      mutedUntil,
+      conversationId: conv._id.toString(),
+    });
+  } catch (error) {
+    console.error('muteConversation error:', error);
+    return res.status(500).json({ success: false, code: 'MUTE_OPERATION_FAILED', message: error.message });
+  }
+};
+
+const unmuteConversation = async (req, res) => {
+  req.body.duration = 0;
+  return muteConversation(req, res);
+};
+
+const getMuteStatus = async (req, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, code: 'UNAUTHORIZED', message: 'Please sign in' });
+    }
+    const { conversationId, receiverId } = req.body;
+    let conv = null;
+    if (conversationId && mongoose.Types.ObjectId.isValid(conversationId)) {
+      conv = await Conversation.findById(conversationId);
+    }
+    if (!conv && receiverId) {
+      conv = await Conversation.findOne({
+        type: 'direct',
+        $and: [
+          { 'members.user': userId },
+          { 'members.user': receiverId }
+        ]
+      });
+    }
+    if (!conv) {
+      return res.status(200).json({ success: true, isMuted: false, mutedUntil: null });
+    }
+
+    const myMember = (conv.members || []).find(
+      m => (m.user?._id || m.user || '').toString() === userId.toString()
+    );
+    const now = new Date();
+    const isMuted = !!(myMember?.isMuted && (!myMember.mutedUntil || new Date(myMember.mutedUntil) > now));
+    const mutedUntil = myMember?.mutedUntil || null;
+
+    return res.status(200).json({
+      success: true,
+      isMuted,
+      mutedUntil,
+      conversationId: conv._id.toString(),
+    });
+  } catch (error) {
+    console.error('getMuteStatus error:', error);
+    return res.status(500).json({ success: false, code: 'GET_MUTE_STATUS_FAILED', message: error.message });
+  }
+};
+
+const deleteConversation = async (req, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    let { conversationId, receiverId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, code: 'UNAUTHORIZED', message: 'User unauthorized' });
+    }
+
+    let conv = null;
+    if (conversationId && mongoose.Types.ObjectId.isValid(conversationId)) {
+      conv = await Conversation.findOne({
+        _id: conversationId,
+        'members.user': userId,
+      });
+    }
+
+    if (!conv && receiverId) {
+      let actualReceiverId = receiverId;
+      if (!mongoose.Types.ObjectId.isValid(receiverId)) {
+        const clean = receiverId.toString().replace(/^@/, '').trim();
+        const found = await Account.findOne({
+          $or: [
+            { username: clean },
+            { username: new RegExp(`^${clean}$`, 'i') },
+            { email: clean },
+          ],
+        });
+        if (found) actualReceiverId = found._id;
+      }
+
+      if (mongoose.Types.ObjectId.isValid(actualReceiverId)) {
+        conv = await Conversation.findOne({
+          type: 'direct',
+          $and: [
+            { 'members.user': userId },
+            { 'members.user': actualReceiverId },
+          ],
+        });
+      }
+    }
+
+    if (!conv) {
+      return res.status(404).json({ success: false, code: 'CONVERSATION_NOT_FOUND', message: 'Conversation not found' });
+    }
+
+    const convId = conv._id;
+
+    // 1. Mark all existing messages as deletedBy this user
+    await Message.updateMany(
+      { conversationId: convId },
+      { $addToSet: { deletedBy: userId } }
+    );
+
+    // 2. Set clearedAt on this member in the conversation
+    await Conversation.updateOne(
+      { _id: convId, 'members.user': userId },
+      { $set: { 'members.$.clearedAt': new Date() } }
+    );
+
+    // 3. Emit socket event to this user's personal room
+    const io = req.app.get('io') || (getIO ? getIO() : null);
+    if (io) {
+      io.to(userId.toString()).emit('conversation_deleted', {
+        conversationId: convId.toString(),
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Conversation deleted successfully',
+      data: { conversationId: convId.toString() },
+    });
+  } catch (error) {
+    console.error('deleteConversation error:', error);
+    return res.status(500).json({ success: false, code: 'DELETE_CONVERSATION_FAILED', message: error.message });
+  }
+};
+
+const updateQuickEmoji = async (req, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    let { conversationId, receiverId, emoji } = req.body;
+    if (!emoji || typeof emoji !== 'string' || !emoji.trim()) {
+      return res.status(400).json({ success: false, message: 'Emoji is required' });
+    }
+    emoji = emoji.trim();
+
+    let conv = null;
+    if (conversationId && mongoose.Types.ObjectId.isValid(conversationId)) {
+      conv = await Conversation.findById(conversationId);
+    } else if (receiverId && userId) {
+      conv = await Conversation.findOne({
+        type: 'direct',
+        'members.user': { $all: [userId, receiverId] }
+      });
+    }
+
+    if (!conv) {
+      return res.status(404).json({ success: false, message: 'Conversation not found' });
+    }
+
+    conv.quickEmoji = emoji;
+    if (!conv.customEmojis) conv.customEmojis = [];
+    if (!conv.customEmojis.includes(emoji)) {
+      conv.customEmojis.push(emoji);
+    }
+    await conv.save();
+
+    try {
+      const io = getIO ? getIO() : null;
+      if (io) {
+        const payload = {
+          conversationId: conv._id.toString(),
+          quickEmoji: emoji,
+          customEmojis: conv.customEmojis,
+          updatedBy: userId ? userId.toString() : null,
+        };
+        io.to(conv._id.toString()).emit('quick_emoji_updated', payload);
+        (conv.members || []).forEach(m => {
+          const uId = (m.user?._id || m.user)?.toString();
+          if (uId) {
+            io.to(uId).emit('quick_emoji_updated', payload);
+          }
+        });
+      }
+    } catch (_) {}
+
+    return res.status(200).json({
+      success: true,
+      conversationId: conv._id.toString(),
+      quickEmoji: conv.quickEmoji,
+      customEmojis: conv.customEmojis,
+    });
+  } catch (error) {
+    console.error('updateQuickEmoji error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getConversations,
   sendMessage,
@@ -2274,4 +2983,9 @@ module.exports = {
   stopShareLocation,
   updateLiveLocation,
   votePoll,
+  muteConversation,
+  unmuteConversation,
+  getMuteStatus,
+  deleteConversation,
+  updateQuickEmoji,
 };

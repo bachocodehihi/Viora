@@ -11,9 +11,8 @@ import '../../widgets/post/post_card.dart';
 import '../../widgets/app_avatar.dart';
 import '../../widgets/reaction/fb_reaction_box.dart';
 import '../post/post_account_screen.dart';
-import '../../widgets/bottomsheet/app_livestream_setup_bottomsheet.dart';
 import '../../services/livestream_service.dart';
-import '../live/livestream_audience_screen.dart';
+import 'widgets/story_tray.dart';
 
 class HomeScreen extends StatefulWidget {
   final String email;
@@ -33,6 +32,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final GlobalKey<StoryTrayState> _storyTrayKey = GlobalKey<StoryTrayState>();
   String? _userAvatar;
   String? _userName;
 
@@ -49,6 +49,9 @@ class _HomeScreenState extends State<HomeScreen> {
     SocketService.onPostLiked(_onSocketPostLiked);
     SocketService.onNewLiveStarted((_) => _loadFeed());
     SocketService.onLiveEnded((_) => _loadFeed());
+    SocketService.onNewStory((_) {
+      if (mounted) _storyTrayKey.currentState?.loadStories();
+    });
   }
 
   void _onSocketPostCommentsCountUpdated(Map<String, dynamic> data) {
@@ -139,6 +142,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _activeLives = [];
 
   Future<void> _loadFeed() async {
+    _storyTrayKey.currentState?.loadStories();
     try {
       final feed = await PostService.getFeed(email: widget.email);
       final lives = await LivestreamService.getActiveLives();
@@ -159,43 +163,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
   }
-
-  final List<Map<String, dynamic>> _onlineFriends = [
-    {
-      'name': 'Alex',
-      'avatar': 'A',
-      'color': AppColors.blue,
-      'online': true,
-      'messages': [
-        {'text': 'Hey! Are we meeting up today?', 'isMe': false, 'time': '10:45 AM'}
-      ]
-    },
-    {
-      'name': 'Sarah',
-      'avatar': 'S',
-      'color': AppColors.pink,
-      'online': true,
-      'messages': [
-        {'text': 'Check out this photo I just took! 🌅', 'isMe': false, 'time': '5:10 PM'}
-      ]
-    },
-    {
-      'name': 'Emma',
-      'avatar': 'E',
-      'color': AppColors.purple,
-      'online': true,
-      'messages': [
-        {'text': 'Loved the logo update!', 'isMe': false, 'time': 'Sunday'}
-      ]
-    },
-    {
-      'name': 'David',
-      'avatar': 'D',
-      'color': AppColors.orange,
-      'online': false,
-      'messages': <Map<String, dynamic>>[]
-    },
-  ];
 
   Future<void> _toggleLike(String id, {String? reactionId}) async {
     final index = _posts.indexWhere((p) => (p['id'] ?? p['_id'])?.toString() == id);
@@ -311,10 +278,15 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
 
             _buildCreatePostBar(context),
-            const SizedBox(height: 28),
+            const SizedBox(height: 20),
 
-            _buildActiveFriendsSection(context),
-            const SizedBox(height: 32),
+            StoryTray(
+              key: _storyTrayKey,
+              userAvatar: _userAvatar,
+              userName: _userName,
+              activeLives: _activeLives,
+            ),
+            const SizedBox(height: 24),
 
             _buildRecentMomentsSection(context),
           ],
@@ -368,51 +340,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
-        const SizedBox(width: 10),
-
-        GestureDetector(
-          onTap: () {
-            AppLivestreamSetupBottomSheet.show(
-              context,
-              userAvatar: _userAvatar,
-              userName: _userName,
-            );
-          },
-          child: Container(
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFFFF416C), Color(0xFFFF4B2B)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFFF416C).withValues(alpha: 0.35),
-                  blurRadius: 8,
-                  offset: const Offset(0, 3),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.sensors_rounded, color: Colors.white, size: 20),
-                const SizedBox(width: 6),
-                Text(
-                  l10n.liveBadge,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ],
     );
   }
@@ -436,267 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Widget _buildActiveFriendsSection(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              l10n.activeFriendsHeader,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                color: context.textMuted,
-                letterSpacing: 1.2,
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppColors.blue.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '${_onlineFriends.where((f) => f['online'] == true).length} ${l10n.onlineCountLabel}',
-                style: const TextStyle(
-                  color: AppColors.blue,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        SizedBox(
-          height: 85,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            itemCount: _activeLives.length + _onlineFriends.length + 1,
-            itemBuilder: (ctx, index) {
-              if (index == 0) {
-                return GestureDetector(
-                  onTap: () {
-                    AppLivestreamSetupBottomSheet.show(
-                      context,
-                      userAvatar: _userAvatar,
-                      userName: _userName,
-                    );
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.only(right: 16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 58,
-                          height: 58,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: context.dividerTheme,
-                              width: 1.5,
-                            ),
-                          ),
-                          padding: const EdgeInsets.all(3),
-                          child: CircleAvatar(
-                            backgroundColor: context.actionPillBg,
-                            child: const Icon(
-                              Icons.videocam_rounded,
-                              color: Colors.redAccent,
-                              size: 24,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          l10n.goLive,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: context.textPrimary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }
 
-              if (index <= _activeLives.length) {
-                final live = _activeLives[index - 1];
-                final host = live['host'] as Map<String, dynamic>? ?? {};
-                final hostName = host['name']?.toString() ?? l10n.liveBadge;
-                final hostAvatar = host['avatar']?.toString();
-
-                return GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => LivestreamAudienceScreen(
-                          liveId: live['id']?.toString() ?? '',
-                          initialTitle: live['title']?.toString(),
-                          hostName: hostName,
-                          hostAvatar: hostAvatar,
-                        ),
-                      ),
-                    );
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.only(right: 16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Container(
-                              width: 58,
-                              height: 58,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.redAccent, width: 2.5),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.redAccent.withValues(alpha: 0.4),
-                                    blurRadius: 8,
-                                    spreadRadius: 1,
-                                  ),
-                                ],
-                              ),
-                              padding: const EdgeInsets.all(2.5),
-                              child: AppAvatar(
-                                avatar: hostAvatar,
-                                name: hostName,
-                                radius: 22,
-                                fontSize: 15,
-                              ),
-                            ),
-                            Positioned(
-                              bottom: -4,
-                              left: 0,
-                              right: 0,
-                              child: Center(
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                  decoration: BoxDecoration(
-                                    color: Colors.redAccent,
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                    l10n.liveBadge.toUpperCase(),
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 8.5,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 7),
-                        SizedBox(
-                          width: 60,
-                          child: Text(
-                            hostName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: context.textPrimary,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }
-
-              final friend = _onlineFriends[index - 1 - _activeLives.length];
-              final isOnline = friend['online'] == true;
-
-              return GestureDetector(
-                onTap: () {
-                  Navigator.pushNamed(
-                    context,
-                    AppRoutes.profileAccount,
-                    arguments: {
-                      'id': friend['id'] ?? friend['userId'],
-                      'email': friend['email'],
-                      'name': friend['name'],
-                      'avatar': friend['avatar'],
-                      'color': friend['color'],
-                    },
-                  );
-                },
-                child: Container(
-                  margin: const EdgeInsets.only(right: 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 58,
-                        height: 58,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: LinearGradient(
-                            colors: isOnline
-                                ? [AppColors.blue, AppColors.teal]
-                                : [Colors.transparent, Colors.transparent],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          border: !isOnline
-                              ? Border.all(
-                                  color: context.activeFriendBg,
-                                  width: 1.5,
-                                )
-                              : null,
-                        ),
-                        padding: const EdgeInsets.all(2.5),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Theme.of(context).scaffoldBackgroundColor,
-                          ),
-                          padding: const EdgeInsets.all(2.5),
-                          child: AppAvatar(
-                            avatar: friend['avatar'],
-                            name: friend['name'],
-                            color: friend['color'] as Color?,
-                            radius: 20,
-                            fontSize: 15,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        friend['name'],
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: context.textMuted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
 
   Widget _buildRecentMomentsSection(BuildContext context) {
     return Column(

@@ -10,9 +10,13 @@ cloudinary.config({
 
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
-    params: {
-        folder: 'Viora',
-        allowedFormats: ['jpg', 'png', 'jpeg'],
+    params: async (req, file) => {
+        const isAudio = file.mimetype?.startsWith('audio') || (file.originalname && /\.(m4a|mp3|aac|wav|ogg|opus)$/i.test(file.originalname));
+        const isVideo = file.mimetype?.startsWith('video') || (file.originalname && /\.(mp4|mov|avi|mkv)$/i.test(file.originalname));
+        return {
+            folder: 'Viora',
+            resource_type: (isAudio || isVideo) ? 'auto' : 'image',
+        };
     },
 });
 

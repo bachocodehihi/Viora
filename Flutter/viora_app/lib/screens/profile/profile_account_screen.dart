@@ -93,6 +93,7 @@ class _ProfileAccountScreenState extends State<ProfileAccountScreen> {
   String? _targetJob;
   String? _targetNationality;
   String? _targetHobby;
+  String? _targetRelationship;
   String? _targetHomeTown;
   List<Map<String, dynamic>> _targetPlacesLived = [];
   bool _isPlacesLivedExpanded = false;
@@ -189,6 +190,7 @@ class _ProfileAccountScreenState extends State<ProfileAccountScreen> {
               _targetJob = account['job']?.toString() ?? _targetJob;
               _targetNationality = account['nationality']?.toString() ?? _targetNationality;
               _targetHobby = account['hobby']?.toString() ?? _targetHobby;
+              _targetRelationship = account['relationship']?.toString() ?? _targetRelationship;
               if (account['placesLived'] is List) {
                 _targetPlacesLived = List<Map<String, dynamic>>.from(
                   (account['placesLived'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
@@ -402,6 +404,27 @@ class _ProfileAccountScreenState extends State<ProfileAccountScreen> {
     if (g == 'female') return l10n.female;
     if (g == 'other') return l10n.other;
     return gender;
+  }
+
+  String _formatRelationship(BuildContext context, String? status) {
+    if (status == null || status.trim().isEmpty) return '';
+    final l10n = context.l10n;
+    switch (status.trim().toLowerCase()) {
+      case 'single':
+        return l10n.singleStatus;
+      case 'dating':
+        return l10n.datingStatus;
+      case 'engaged':
+        return l10n.engagedStatus;
+      case 'married':
+        return l10n.marriedStatus;
+      case 'complicated':
+        return l10n.complicatedStatus;
+      case 'exploring':
+        return l10n.exploringStatus;
+      default:
+        return status;
+    }
   }
 
   void _initSocketListeners() {
@@ -1933,6 +1956,10 @@ class _ProfileAccountScreenState extends State<ProfileAccountScreen> {
                           addRow(Icons.sports_esports_outlined, l10n.hobbies, _targetHobby!.trim());
                         }
 
+                        if (_targetRelationship != null && _targetRelationship!.trim().isNotEmpty) {
+                          addRow(Icons.favorite_outline, l10n.relationship, _formatRelationship(context, _targetRelationship));
+                        }
+
                         if (infoRows.isEmpty) {
                           return [
                             Padding(
@@ -1954,7 +1981,7 @@ class _ProfileAccountScreenState extends State<ProfileAccountScreen> {
                       }(),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 28),
                   Text(
                     l10n.allPosts,
                     style: TextStyle(
@@ -2023,6 +2050,7 @@ class _ProfileAccountScreenState extends State<ProfileAccountScreen> {
                       )
                     else
                       ListView.builder(
+                        padding: EdgeInsets.zero,
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: _targetPosts.length,

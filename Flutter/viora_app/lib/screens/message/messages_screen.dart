@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../config/app_colors.dart';
@@ -14,6 +15,7 @@ import '../../utils/time_formatter.dart';
 import '../../widgets/app_avatar.dart';
 import '../../widgets/toast/app_toast.dart';
 import '../chat/chat_detail_screen.dart';
+import '../chat/chat_info_screen.dart';
 import '../chat/widgets/chat_call_bubble.dart';
 import '../post/status_screen.dart';
 import 'friend_note_viewer_screen.dart';
@@ -55,6 +57,8 @@ class _MessagesScreenState extends State<MessagesScreen> {
   bool _isLoading = true;
   Timer? _onlinePollTimer;
   Function(Map<String, dynamic>)? _socketConvUpdatedCb;
+  Function(Map<String, dynamic>)? _socketConversationMuteCb;
+  Function(Map<String, dynamic>)? _socketConversationDeletedCb;
   Function(Map<String, dynamic>)? _socketPollUpdatedCb;
   Function(Map<String, dynamic>)? _socketNewMsgCb;
   Function(Map<String, dynamic>)? _socketCallMsgUpdatedCb;
@@ -191,6 +195,11 @@ class _MessagesScreenState extends State<MessagesScreen> {
         }
       }
       return rawText;
+    } else if (type == 'audio') {
+      final dur = (msg['text'] ?? msg['content'] ?? '').toString().trim();
+      body = dur.isNotEmpty ? '🎤 $dur' : '🎤 ${LanguageManager.isEnglish() ? 'Voice message' : 'Tin nhắn thoại'}';
+    } else if (type == 'emoji' || ChatInfoScreen.getReactionAsset(rawText) != null) {
+      body = ChatInfoScreen.getEmojiSymbol(rawText);
     } else {
       body = rawText;
     }
@@ -210,11 +219,14 @@ class _MessagesScreenState extends State<MessagesScreen> {
       }
     }
 
+    final bool isAi = msg['isAi'] == true || senderId == 'viora_ai';
     if (isGroup) {
-      final prefix = isFromMe ? '${l10n.you}: ' : (senderName.isNotEmpty ? '$senderName: ' : '');
+      final prefix = isFromMe
+          ? '${l10n.you}: '
+          : (isAi ? 'VioraAI: ' : (senderName.isNotEmpty ? '$senderName: ' : ''));
       return '$prefix$body';
     } else {
-      final prefix = isFromMe ? '${l10n.you}: ' : '';
+      final prefix = isFromMe ? '${l10n.you}: ' : (isAi ? 'VioraAI: ' : '');
       return '$prefix$body';
     }
   }
@@ -406,6 +418,30 @@ class _MessagesScreenState extends State<MessagesScreen> {
             }
             _sortChatsByLatest();
           }
+        });
+      }
+    });
+
+    SocketService.onConversationMuteUpdated(_socketConversationMuteCb = (data) {
+      if (!mounted) return;
+      final convId = data['conversationId']?.toString();
+      if (convId != null) {
+        final existingIndex = _chats.indexWhere((c) => c['id']?.toString() == convId);
+        if (existingIndex != -1) {
+          setState(() {
+            _chats[existingIndex]['isMuted'] = data['isMuted'] == true;
+            _chats[existingIndex]['mutedUntil'] = data['mutedUntil'];
+          });
+        }
+      }
+    });
+
+    SocketService.onConversationDeleted(_socketConversationDeletedCb = (data) {
+      if (!mounted) return;
+      final convId = data['conversationId']?.toString();
+      if (convId != null) {
+        setState(() {
+          _chats.removeWhere((c) => c['id']?.toString() == convId);
         });
       }
     });
@@ -720,6 +756,8 @@ class _MessagesScreenState extends State<MessagesScreen> {
     _searchController.dispose();
     MessagesScreen._globalRefreshCallback = null;
     if (_socketConvUpdatedCb != null) SocketService.offConversationUpdated(_socketConvUpdatedCb);
+    if (_socketConversationMuteCb != null) SocketService.offConversationMuteUpdated(_socketConversationMuteCb);
+    if (_socketConversationDeletedCb != null) SocketService.offConversationDeleted(_socketConversationDeletedCb);
     if (_socketPollUpdatedCb != null) SocketService.offPollUpdated(_socketPollUpdatedCb);
     if (_socketNewMsgCb != null) SocketService.offNewMessage(_socketNewMsgCb);
     if (_socketCallMsgUpdatedCb != null) SocketService.offCallMessageUpdated(_socketCallMsgUpdatedCb);
@@ -1814,6 +1852,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                   ),
                                   child: ListTile(
                                     onTap: () => _openChatWithFriend(chat),
+                                    onLongPress: () => _showChatOptionsBottomSheet(chat),
                                     contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 4.h),
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
                                     leading: AppAvatar(
@@ -1849,19 +1888,32 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                       ),
                                     ),
                                     trailing: SizedBox(
-                                      width: 65.w,
+                                      width: 72.w,
                                       child: Column(
                                         mainAxisAlignment: MainAxisAlignment.center,
                                         crossAxisAlignment: CrossAxisAlignment.end,
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          Text(
-                                            _formatChatTime(chat),
-                                            style: TextStyle(
-                                              color: isUnread ? AppColors.blue : context.textMuted,
-                                              fontSize: 11.sp,
-                                              fontWeight: isUnread ? FontWeight.bold : FontWeight.normal,
-                                            ),
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (chat['isMuted'] == true) ...[
+                                                Icon(
+                                                  Icons.notifications_off_rounded,
+                                                  size: 13.r,
+                                                  color: context.textMuted,
+                                                ),
+                                                SizedBox(width: 3.w),
+                                              ],
+                                              Text(
+                                                _formatChatTime(chat),
+                                                style: TextStyle(
+                                                  color: isUnread ? AppColors.blue : context.textMuted,
+                                                  fontSize: 11.sp,
+                                                  fontWeight: isUnread ? FontWeight.bold : FontWeight.normal,
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                           if (isUnread) ...[
                                             SizedBox(height: 4.h),
@@ -1894,6 +1946,409 @@ class _MessagesScreenState extends State<MessagesScreen> {
                   ],
                 ),
               ),
+      ),
+    );
+  }
+  void _showChatOptionsBottomSheet(Map<String, dynamic> chat) {
+    HapticFeedback.mediumImpact();
+    final l10n = context.l10n;
+    final isEn = LanguageManager.isEnglish();
+    final isMuted = chat['isMuted'] == true;
+    final String chatName = (chat['name'] ?? '').toString();
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (bottomSheetCtx) {
+        return Container(
+          decoration: BoxDecoration(
+            color: context.cardBg,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.08),
+                blurRadius: 16,
+                offset: const Offset(0, -4),
+              ),
+            ],
+          ),
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Center(
+                  child: Container(
+                    width: 38.w,
+                    height: 4.h,
+                    margin: EdgeInsets.only(bottom: 16.h),
+                    decoration: BoxDecoration(
+                      color: context.textMuted.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2.r),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                  child: Row(
+                    children: [
+                      AppAvatar(
+                        avatar: chat['avatar'],
+                        name: chatName,
+                        color: chat['color'] as Color?,
+                        radius: 22.r,
+                      ),
+                      SizedBox(width: 12.w),
+                      Expanded(
+                        child: Text(
+                          chatName,
+                          style: TextStyle(
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.bold,
+                            color: context.textPrimary,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 12.h),
+                Divider(color: context.textMuted.withValues(alpha: 0.15), height: 1),
+                SizedBox(height: 8.h),
+                _buildBottomSheetActionTile(
+                  icon: isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                  title: isMuted ? (isEn ? 'Unmute' : 'Bật thông báo') : l10n.muteNotifications,
+                  iconColor: isMuted ? Colors.orangeAccent : null,
+                  onTap: () {
+                    Navigator.pop(bottomSheetCtx);
+                    _toggleChatMuteStatus(chat);
+                  },
+                ),
+                _buildBottomSheetActionTile(
+                  icon: Icons.delete_outline_rounded,
+                  title: isEn ? 'Delete conversation' : 'Xóa cuộc trò chuyện',
+                  iconColor: AppColors.red,
+                  textColor: AppColors.red,
+                  onTap: () {
+                    Navigator.pop(bottomSheetCtx);
+                    _confirmDeleteConversation(chat);
+                  },
+                ),
+                SizedBox(height: 8.h),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBottomSheetActionTile({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+    Color? iconColor,
+    Color? textColor,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12.r),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                size: 22.r,
+                color: iconColor ?? context.textPrimary,
+              ),
+              SizedBox(width: 14.w),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14.5.sp,
+                    fontWeight: FontWeight.w500,
+                    color: textColor ?? context.textPrimary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _confirmDeleteConversation(Map<String, dynamic> chat) {
+    final l10n = context.l10n;
+    final isEn = LanguageManager.isEnglish();
+    final String chatName = (chat['name'] ?? '').toString();
+
+    showDialog(
+      context: context,
+      builder: (dlgCtx) => AlertDialog(
+        backgroundColor: context.cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20.r)),
+        title: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8.r),
+              decoration: BoxDecoration(
+                color: AppColors.red.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.delete_outline_rounded, color: AppColors.red, size: 22.r),
+            ),
+            SizedBox(width: 10.w),
+            Expanded(
+              child: Text(
+                isEn ? 'Delete conversation?' : 'Xóa cuộc trò chuyện?',
+                style: TextStyle(
+                  fontSize: 17.sp,
+                  fontWeight: FontWeight.bold,
+                  color: context.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          isEn
+              ? 'Are you sure you want to delete the conversation with  This will delete the entire chat history on your side.'
+              : 'Bạn có chắc chắn muốn xóa cuộc trò chuyện với  Hành động này sẽ xóa toàn bộ nội dung cuộc trò chuyện ở phía bạn.',
+          style: TextStyle(
+            fontSize: 13.5.sp,
+            color: context.textMuted,
+            height: 1.4,
+          ),
+        ),
+        actionsPadding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 14.h),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dlgCtx),
+            child: Text(
+              l10n.cancel,
+              style: TextStyle(
+                fontSize: 14.5.sp,
+                fontWeight: FontWeight.w600,
+                color: context.textMuted,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.red,
+              elevation: 0,
+              padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 10.h),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+            ),
+            onPressed: () async {
+              Navigator.pop(dlgCtx);
+              await _deleteConversation(chat);
+            },
+            child: Text(
+              l10n.delete,
+              style: TextStyle(
+                fontSize: 14.sp,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteConversation(Map<String, dynamic> chat) async {
+    final convId = chat['id']?.toString() ?? '';
+    final receiverId = chat['receiverId']?.toString() ?? chat['otherUserId']?.toString();
+    if (convId.isEmpty && (receiverId == null || receiverId.isEmpty)) return;
+
+    setState(() {
+      _chats.removeWhere((c) => c['id']?.toString() == convId);
+    });
+
+    try {
+      final res = await MessageService.deleteConversation(
+        conversationId: convId.isNotEmpty ? convId : null,
+        receiverId: receiverId,
+      );
+      if (res != null && res['success'] == true) {
+        if (mounted) {
+          AppToast.success(context, context.l10n.chatHistoryClearedToast);
+        }
+      }
+    } catch (e) {
+      debugPrint('Error deleting conversation: ');
+    }
+  }
+
+  void _toggleChatMuteStatus(Map<String, dynamic> chat) {
+    final convId = chat['id']?.toString() ?? '';
+    final receiverId = chat['receiverId']?.toString() ?? chat['otherUserId']?.toString();
+    final bool isMuted = chat['isMuted'] == true;
+
+    if (isMuted) {
+      setState(() {
+        chat['isMuted'] = false;
+        chat['mutedUntil'] = null;
+      });
+      MessageService.unmuteConversation(
+        conversationId: convId.isNotEmpty ? convId : null,
+        receiverId: receiverId,
+      );
+      AppToast.success(context, context.l10n.unmutedToast);
+    } else {
+      _showMuteDialogForChat(chat);
+    }
+  }
+
+  void _showMuteDialogForChat(Map<String, dynamic> chat) {
+    final l10n = context.l10n;
+    final convId = chat['id']?.toString() ?? '';
+    final receiverId = chat['receiverId']?.toString() ?? chat['otherUserId']?.toString();
+    int selectedDuration = 15;
+
+    showDialog(
+      context: context,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final options = [
+            {'title': l10n.in15Minutes, 'duration': 15},
+            {'title': l10n.in1Hour, 'duration': 60},
+            {'title': l10n.in8Hours, 'duration': 480},
+            {'title': l10n.in24Hours, 'duration': 1440},
+            {'title': l10n.untilITurnBackOn, 'duration': -1},
+          ];
+
+          return AlertDialog(
+            backgroundColor: context.cardBg,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20.r)),
+            titlePadding: EdgeInsets.fromLTRB(20.w, 20.h, 20.w, 8.h),
+            contentPadding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+            actionsPadding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 14.h),
+            title: Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(8.r),
+                  decoration: BoxDecoration(
+                    color: Colors.orangeAccent.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.notifications_off_rounded, color: Colors.orangeAccent, size: 20.r),
+                ),
+                SizedBox(width: 10.w),
+                Expanded(
+                  child: Text(
+                    l10n.muteNotifications,
+                    style: TextStyle(
+                      fontSize: 17.sp,
+                      fontWeight: FontWeight.bold,
+                      color: context.textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: options.map((opt) {
+                final duration = opt['duration'] as int;
+                final isSelected = selectedDuration == duration;
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12.r),
+                    onTap: () {
+                      setDialogState(() {
+                        selectedDuration = duration;
+                      });
+                    },
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isSelected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+                            color: isSelected ? AppColors.blue : context.textMuted,
+                            size: 20.r,
+                          ),
+                          SizedBox(width: 12.w),
+                          Expanded(
+                            child: Text(
+                              opt['title'] as String,
+                              style: TextStyle(
+                                fontSize: 14.5.sp,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                                color: isSelected ? context.textPrimary : context.textPrimary.withValues(alpha: 0.8),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dlgCtx),
+                child: Text(
+                  l10n.cancel,
+                  style: TextStyle(
+                    fontSize: 14.5.sp,
+                    fontWeight: FontWeight.w600,
+                    color: context.textMuted,
+                  ),
+                ),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.blue,
+                  elevation: 0,
+                  padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 10.h),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                ),
+                onPressed: () async {
+                  Navigator.pop(dlgCtx);
+                  setState(() {
+                    chat['isMuted'] = true;
+                  });
+                  final res = await MessageService.muteConversation(
+                    conversationId: convId.isNotEmpty ? convId : null,
+                    receiverId: receiverId,
+                    durationMinutes: selectedDuration,
+                  );
+                  if (res != null && res['success'] == true && mounted) {
+                    setState(() {
+                      chat['isMuted'] = true;
+                      chat['mutedUntil'] = res['mutedUntil'];
+                    });
+                    AppToast.success(context, l10n.mutedToast);
+                  }
+                },
+                child: Text(
+                  l10n.muteBtn,
+                  style: TextStyle(
+                    fontSize: 14.sp,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

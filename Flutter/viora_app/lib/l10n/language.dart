@@ -985,6 +985,8 @@ class Language {
   String get declined => translate('declined');
   String get watchLiveStream => translate('watchLiveStream');
   String get viewPost => translate('viewPost');
+  String get sharedAPost => translate('sharedAPost');
+  String get postNotFound => translate('postNotFound');
   String get groupPrivacyTitle => translate('groupPrivacyTitle');
 
   String blockUserTitle(String name) => translate('blockUserTitle').replaceAll('{name}', name);
@@ -1261,6 +1263,36 @@ class Language {
   String get notifSentLocation => translate('notifSentLocation');
   String get notifSentPoll => translate('notifSentPoll');
   String get notifSentMessage => translate('notifSentMessage');
+  String get mentionAllTag => translate('mentionAllTag');
+  String get mentionAllSubtitle => translate('mentionAllSubtitle');
+  String get mentionAllKeywords => translate('mentionAllKeywords');
+  String get mentionAiSubtitle => translate('mentionAiSubtitle');
+  String get aiTyping => translate('aiTyping');
+  String get member => translate('member');
+  String get yourStory => translate('yourStory');
+  String get shareToStory => translate('shareToStory');
+  String get enterStoryContentPrompt => translate('enterStoryContentPrompt');
+  String get chooseStoryImagePrompt => translate('chooseStoryImagePrompt');
+  String get storyPostSuccess => translate('storyPostSuccess');
+  String get storyPostFailed => translate('storyPostFailed');
+  String get tapToTypeStoryHint => translate('tapToTypeStoryHint');
+  String get addCaptionStoryHint => translate('addCaptionStoryHint');
+  String storyViewersCount(dynamic count) => translate('storyViewersCount').replaceAll('{count}', count.toString());
+  String storyViewersTitle(dynamic count) => translate('storyViewersTitle').replaceAll('{count}', count.toString());
+  String get noStoryViewersYet => translate('noStoryViewersYet');
+  String get sendStoryReplyHint => translate('sendStoryReplyHint');
+  String get deleteStoryTitle => translate('deleteStoryTitle');
+  String get deleteStoryConfirm => translate('deleteStoryConfirm');
+  String get storyDeletedSuccess => translate('storyDeletedSuccess');
+  String reactedToStoryToast(String reaction) => translate('reactedToStoryToast').replaceAll('{reaction}', reaction);
+  String get notifReactedYourStory => translate('notifReactedYourStory');
+  String get notifReactedLoveStory => translate('notifReactedLoveStory');
+  String get notifReactedHahaStory => translate('notifReactedHahaStory');
+  String get notifReactedWowStory => translate('notifReactedWowStory');
+  String get notifReactedSadStory => translate('notifReactedSadStory');
+  String get notifReactedAngryStory => translate('notifReactedAngryStory');
+  String get storyTextMode => translate('storyTextMode');
+  String get storyPhotoMode => translate('storyPhotoMode');
 
   String translate(String key) {
     String locale = 'en';

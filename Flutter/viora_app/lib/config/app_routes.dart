@@ -42,6 +42,9 @@ import '../screens/setting/like_history_screen.dart';
 import '../screens/setting/comment_history_screen.dart';
 import '../screens/live/livestream_broadcaster_screen.dart';
 import '../screens/live/livestream_audience_screen.dart';
+import '../screens/post/create_story_screen.dart';
+import '../screens/post/story_screen.dart';
+import '../models/story_model.dart';
 import '../l10n/language.dart';
 
 class AppRoutes {
@@ -86,6 +89,8 @@ class AppRoutes {
   static const String commentHistory = '/comment-history';
   static const String liveBroadcaster = '/live-broadcaster';
   static const String liveAudience = '/live-audience';
+  static const String createStory = '/create-story';
+  static const String storyViewer = '/story-viewer';
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -352,15 +357,23 @@ class AppRoutes {
       case share:
         String postAuthor = '';
         String postContent = '';
+        String postId = '';
+        Map<String, dynamic>? post;
         if (settings.arguments is Map<String, dynamic>) {
           final args = settings.arguments as Map<String, dynamic>;
           postAuthor = args['postAuthor'] as String? ?? '';
           postContent = args['postContent'] as String? ?? '';
+          postId = args['postId'] as String? ?? '';
+          if (args['post'] is Map<String, dynamic>) {
+            post = args['post'] as Map<String, dynamic>;
+          }
         }
         return MaterialPageRoute(
           builder: (_) => ShareScreen(
             postAuthor: postAuthor,
             postContent: postContent,
+            postId: postId,
+            post: post,
           ),
           settings: settings,
         );
@@ -373,6 +386,7 @@ class AppRoutes {
         String? conversationId;
         String? groupId;
         String? description;
+        bool? isMember;
 
         if (settings.arguments is Map<String, dynamic>) {
           final args = settings.arguments as Map<String, dynamic>;
@@ -388,6 +402,9 @@ class AppRoutes {
           conversationId = args['conversationId']?.toString();
           groupId = args['id']?.toString() ?? args['groupId']?.toString();
           final privacy = args['privacy']?.toString();
+          if (args['isMember'] != null) {
+            isMember = args['isMember'] == true;
+          }
           return MaterialPageRoute(
             builder: (_) => ProfileGroupScreen(
               name: name,
@@ -398,6 +415,7 @@ class AppRoutes {
               conversationId: conversationId,
               groupId: groupId,
               privacy: privacy,
+              isMember: isMember,
             ),
             settings: settings,
           );
@@ -412,6 +430,7 @@ class AppRoutes {
             description: description,
             conversationId: conversationId,
             groupId: groupId,
+            isMember: isMember,
           ),
           settings: settings,
         );
@@ -737,6 +756,28 @@ class AppRoutes {
             initialTitle: args['initialTitle']?.toString(),
             hostName: args['hostName']?.toString(),
             hostAvatar: args['hostAvatar']?.toString(),
+          ),
+          settings: settings,
+        );
+
+      case createStory:
+        final args = settings.arguments as Map<String, dynamic>? ?? {};
+        return MaterialPageRoute(
+          builder: (_) => CreateStoryScreen(
+            userAvatar: args['userAvatar'] as String?,
+            userName: args['userName'] as String?,
+          ),
+          settings: settings,
+        );
+
+      case storyViewer:
+        final args = settings.arguments as Map<String, dynamic>? ?? {};
+        final groups = (args['groups'] as List<dynamic>?)?.cast<UserStoryGroup>() ?? [];
+        final initialIndex = (args['initialIndex'] as num?)?.toInt() ?? 0;
+        return MaterialPageRoute(
+          builder: (_) => StoryScreen(
+            groups: groups,
+            initialGroupIndex: initialIndex,
           ),
           settings: settings,
         );

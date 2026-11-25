@@ -1,5 +1,6 @@
 import '../../../services/socket_service.dart';
 import 'package:flutter/foundation.dart';
+import '../../../l10n/language.dart';
 import '../../../services/message_service.dart';
 import '../../../services/session_service.dart';
 
@@ -347,7 +348,9 @@ class ChatPollController {
       }
 
       if (name.isEmpty) {
-        name = id == currentUserId ? 'Bạn' : 'Thành viên';
+        name = id == currentUserId
+            ? Language.translateStatic('you')
+            : Language.translateStatic('member');
       }
 
       resolvedList.add({

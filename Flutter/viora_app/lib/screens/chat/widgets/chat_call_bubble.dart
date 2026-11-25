@@ -120,7 +120,6 @@ class ChatCallBubble extends StatelessWidget {
       );
     }
 
-    // 'missed' (or unknown fallback)
     if (isMe) {
       return (
         title: isVideo ? l10n.videoCallTitle : l10n.voiceCallTitle,
@@ -201,7 +200,6 @@ class ChatCallBubble extends StatelessWidget {
       return '$prefix$title • ${l10n.callCancelledShort}';
     }
 
-    // missed
     if (!isMe) {
       final missed = isVideo ? l10n.missedVideoCall : l10n.missedVoiceCall;
       return isGroup ? '$prefix$missed' : missed;

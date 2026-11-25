@@ -1,4 +1,4 @@
-// Script để xóa unique index của username
+
 require('dotenv').config();
 const mongoose = require('mongoose');
 
@@ -10,7 +10,6 @@ const dropUsernameIndex = async () => {
     const db = mongoose.connection.db;
     const collection = db.collection('accounts');
 
-    // Xóa index unique của username
     try {
       await collection.dropIndex('username_1');
       console.log('✅ Dropped username unique index successfully');

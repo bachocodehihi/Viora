@@ -1030,6 +1030,7 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
               'privacy': gPrivacy,
               'description': group['description'] ?? '',
               'membersCount': (group['members'] as num?)?.toInt() ?? 1,
+              'isMember': group['isMember'] == true,
             },
           );
           if (mounted) _performSearch();

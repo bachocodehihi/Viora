@@ -127,7 +127,18 @@ class NotificationService {
       final msgId = data['messageId']?.toString();
       final notifId = (convId ?? msgId ?? DateTime.now().millisecondsSinceEpoch.toString()).hashCode;
 
-      const androidDetails = AndroidNotificationDetails(
+      ByteArrayAndroidBitmap? largeIconBitmap;
+      final avatarUrl = (data['senderAvatar'] ?? data['avatar'] ?? data['imageUrl'])?.toString().trim();
+      if (avatarUrl != null && avatarUrl.isNotEmpty && (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://'))) {
+        try {
+          final res = await http.get(Uri.parse(avatarUrl)).timeout(const Duration(seconds: 4));
+          if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+            largeIconBitmap = ByteArrayAndroidBitmap(res.bodyBytes);
+          }
+        } catch (_) {}
+      }
+
+      final androidDetails = AndroidNotificationDetails(
         'viora_notification_channel',
         'Viora Notifications',
         channelDescription: 'Viora notifications and messages channel',
@@ -135,13 +146,14 @@ class NotificationService {
         priority: Priority.high,
         playSound: true,
         enableVibration: true,
+        largeIcon: largeIconBitmap,
       );
       const iosDetails = DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
       );
-      const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+      final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
 
       await _localNotifications.show(
         notifId,

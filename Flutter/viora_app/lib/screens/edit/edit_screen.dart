@@ -16,6 +16,7 @@ import 'edit_birthday_screen.dart';
 import 'edit_hobby_screen.dart';
 import 'edit_places_lived_screen.dart';
 import 'edit_hometown_screen.dart';
+import 'edit_relationship_screen.dart';
 
 class EditScreen extends StatefulWidget {
   final String? username;
@@ -28,6 +29,7 @@ class EditScreen extends StatefulWidget {
   final String? job;
   final String? nationality;
   final String? hobby;
+  final String? relationship;
   final String? avatar;
   final String? coverImage;
   final List<dynamic>? placesLived;
@@ -44,6 +46,7 @@ class EditScreen extends StatefulWidget {
     this.job,
     this.nationality,
     this.hobby,
+    this.relationship,
     this.avatar,
     this.coverImage,
     this.placesLived,
@@ -67,6 +70,7 @@ class _EditScreenState extends State<EditScreen> {
   DateTime? _birthday;
   String? _avatarUrl;
   String? _coverUrl;
+  String? _relationship;
   File? _avatarFile;
   File? _coverFile;
   List<Map<String, dynamic>> _placesLived = [];
@@ -82,6 +86,7 @@ class _EditScreenState extends State<EditScreen> {
     _jobController = TextEditingController(text: widget.job ?? '');
     _nationalityController = TextEditingController(text: widget.nationality ?? '');
     _hobbyController = TextEditingController(text: widget.hobby ?? '');
+    _relationship = widget.relationship;
     _avatarUrl = widget.avatar;
     _coverUrl = widget.coverImage;
 
@@ -240,6 +245,42 @@ class _EditScreenState extends State<EditScreen> {
       setState(() {
         _hobbyController.text = result;
       });
+    }
+  }
+
+  Future<void> _editRelationship() async {
+    FocusScope.of(context).unfocus();
+    final result = await Navigator.push<String?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditRelationshipScreen(initialStatus: _relationship),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _relationship = result;
+      });
+    }
+  }
+
+  String _getRelationshipLabel(BuildContext context, String? status) {
+    if (status == null || status.isEmpty) return '';
+    final l10n = context.l10n;
+    switch (status.toLowerCase()) {
+      case 'single':
+        return l10n.singleStatus;
+      case 'dating':
+        return l10n.datingStatus;
+      case 'engaged':
+        return l10n.engagedStatus;
+      case 'married':
+        return l10n.marriedStatus;
+      case 'complicated':
+        return l10n.complicatedStatus;
+      case 'exploring':
+        return l10n.exploringStatus;
+      default:
+        return status;
     }
   }
 
@@ -696,6 +737,14 @@ class _EditScreenState extends State<EditScreen> {
                       hint: l10n.addHobbiesHint,
                       icon: Icons.palette_outlined,
                       onTap: _editHobby,
+                    ),
+                    _buildDivider(),
+                    _buildNavigationField(
+                      label: l10n.relationship,
+                      value: _getRelationshipLabel(context, _relationship),
+                      hint: l10n.relationship,
+                      icon: Icons.favorite_outline_rounded,
+                      onTap: _editRelationship,
                     ),
                   ],
                 ),

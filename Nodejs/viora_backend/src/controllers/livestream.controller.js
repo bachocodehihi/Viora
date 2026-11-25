@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const LiveStream = require('../models/livestream.model');
 const Post = require('../models/post.model');
 const Account = require('../models/account.model');
+const Group = require('../models/group.model');
 const { verifyToken } = require('../config/jwt.config');
 const jwt = require('jsonwebtoken');
 const { RtcTokenBuilder, RtcRole } = require('agora-token');
@@ -74,7 +75,34 @@ const createLive = async (req, res) => {
       return res.status(401).json({ success: false, code: 'UNAUTHORIZED', message: 'Please sign in to start live stream' });
     }
 
-    const { title, mode, thumbnail } = req.body;
+    const { title, mode, thumbnail, privacy, groupId, allowedViewers } = req.body;
+    let livePrivacy = privacy || 'public';
+    let groupDoc = null;
+
+    if (groupId) {
+      groupDoc = await Group.findById(groupId);
+      if (!groupDoc) {
+        return res.status(404).json({ success: false, code: 'GROUP_NOT_FOUND', message: 'Group not found' });
+      }
+      const isMember = groupDoc.owner?.toString() === userId.toString() ||
+        (Array.isArray(groupDoc.members) && groupDoc.members.some(m => m.user?.toString() === userId.toString()));
+      if (!isMember) {
+        return res.status(403).json({ success: false, code: 'NOT_GROUP_MEMBER', message: 'You are not a member of this group' });
+      }
+      livePrivacy = 'group';
+    } else {
+      if (!['public', 'friends', 'custom'].includes(livePrivacy)) {
+        livePrivacy = 'public';
+      }
+    }
+
+    let formattedAllowedViewers = [];
+    if (!groupId && livePrivacy === 'custom' && Array.isArray(allowedViewers)) {
+      formattedAllowedViewers = allowedViewers
+        .map(id => id?.toString()?.trim())
+        .filter(id => id && mongoose.Types.ObjectId.isValid(id));
+    }
+
     const channelName = `viora_live_${userId}_${Date.now()}`;
     const liveMode = mode === 'screen' ? 'screen' : 'camera';
 
@@ -84,6 +112,9 @@ const createLive = async (req, res) => {
       channelName,
       mode: liveMode,
       status: 'live',
+      privacy: livePrivacy,
+      group: groupId || null,
+      allowedViewers: formattedAllowedViewers,
       thumbnail: thumbnail || null,
       startedAt: new Date(),
     });
@@ -98,18 +129,26 @@ const createLive = async (req, res) => {
       const { getIO } = require('../socket');
       const io = getIO ? getIO() : null;
       if (io) {
-        io.emit('new_live_started', {
+        const payload = {
           liveId: liveStream._id.toString(),
           title: liveStream.title,
           channelName,
           mode: liveStream.mode,
+          privacy: liveStream.privacy,
+          groupId: groupId || null,
+          groupName: groupDoc?.name || null,
+          allowedViewers: formattedAllowedViewers,
           host: {
             id: liveStream.host._id.toString(),
             name: liveStream.host.username || 'User',
             avatar: liveStream.host.avatar,
           },
           startedAt: liveStream.startedAt
-        });
+        };
+        if (groupId) {
+          io.to(`group_${groupId}`).emit('new_live_started', payload);
+        }
+        io.emit('new_live_started', payload);
       }
     } catch (sockErr) {
       console.warn('Socket emit new_live_started error:', sockErr.message);
@@ -121,14 +160,34 @@ const createLive = async (req, res) => {
         const hostName = hostUser?.username || 'User';
         const recipientSet = new Set();
 
-        if (Array.isArray(hostUser?.friends)) {
-          for (const f of hostUser.friends) {
-            recipientSet.add(f.toString());
+        if (livePrivacy === 'group' && groupDoc) {
+          if (groupDoc.owner) recipientSet.add(groupDoc.owner.toString());
+          if (Array.isArray(groupDoc.members)) {
+            for (const m of groupDoc.members) {
+              if (m.user) recipientSet.add(m.user.toString());
+            }
           }
-        }
-        if (Array.isArray(hostUser?.followers)) {
-          for (const fol of hostUser.followers) {
-            recipientSet.add(fol.toString());
+        } else if (livePrivacy === 'custom') {
+          for (const viewerId of formattedAllowedViewers) {
+            recipientSet.add(viewerId.toString());
+          }
+        } else if (livePrivacy === 'friends') {
+          if (Array.isArray(hostUser?.friends)) {
+            for (const f of hostUser.friends) {
+              recipientSet.add(f.toString());
+            }
+          }
+        } else {
+          // public
+          if (Array.isArray(hostUser?.friends)) {
+            for (const f of hostUser.friends) {
+              recipientSet.add(f.toString());
+            }
+          }
+          if (Array.isArray(hostUser?.followers)) {
+            for (const fol of hostUser.followers) {
+              recipientSet.add(fol.toString());
+            }
           }
         }
 
@@ -139,8 +198,11 @@ const createLive = async (req, res) => {
             recipient: recipientId,
             sender: userId,
             livestream: liveStream._id,
-            type: 'friend_live',
-            content: liveStream.title || 'Live Stream'
+            group: groupId || null,
+            type: groupId ? 'livestream' : 'friend_live',
+            content: groupId
+              ? `${hostName} đã bắt đầu phát trực tiếp trong ${groupDoc.name}`
+              : (liveStream.title || 'Live Stream')
           });
         }
       } catch (notifErr) {
@@ -161,6 +223,9 @@ const createLive = async (req, res) => {
         channelName: liveStream.channelName,
         mode: liveStream.mode,
         status: liveStream.status,
+        privacy: liveStream.privacy,
+        groupId: groupId || null,
+        groupName: groupDoc?.name || null,
         startedAt: liveStream.startedAt,
         host: {
           id: liveStream.host._id.toString(),
@@ -177,12 +242,58 @@ const createLive = async (req, res) => {
 
 const getActiveLives = async (req, res) => {
   try {
+    const userId = await getUserIdFromReq(req);
+    let userFriends = [];
+    let userGroupIds = [];
+
+    if (userId) {
+      const userAcc = await Account.findById(userId).select('friends').lean();
+      if (userAcc && Array.isArray(userAcc.friends)) {
+        userFriends = userAcc.friends.map(f => f.toString());
+      }
+      const myGroups = await Group.find({
+        $or: [{ 'members.user': userId }, { owner: userId }]
+      }).select('_id').lean();
+      userGroupIds = myGroups.map(g => g._id.toString());
+    }
+
     const lives = await LiveStream.find({ status: 'live' })
       .sort({ createdAt: -1 })
-      .populate('host', 'username avatar email isOnline privacy')
+      .populate('host', 'username avatar email isOnline privacy friends')
+      .populate('group', 'name avatar')
       .lean();
 
-    const formatted = lives.map(l => {
+    const filtered = lives.filter(l => {
+      const hostId = l.host?._id ? l.host._id.toString() : '';
+      // Host always sees their own live stream
+      if (userId && hostId === userId.toString()) return true;
+
+      // Group live: only members of this group
+      if (l.privacy === 'group' || l.group) {
+        if (!userId) return false;
+        const gId = (l.group?._id || l.group)?.toString();
+        return userGroupIds.includes(gId);
+      }
+
+      // Custom live: only explicitly allowed viewers
+      if (l.privacy === 'custom') {
+        if (!userId) return false;
+        const allowed = Array.isArray(l.allowedViewers) ? l.allowedViewers.map(v => v.toString()) : [];
+        return allowed.includes(userId.toString());
+      }
+
+      // Friends only
+      if (l.privacy === 'friends') {
+        if (!userId) return false;
+        const hostFriends = Array.isArray(l.host?.friends) ? l.host.friends.map(f => f.toString()) : [];
+        return hostFriends.includes(userId.toString()) || userFriends.includes(hostId);
+      }
+
+      // Public: everyone can see
+      return true;
+    });
+
+    const formatted = filtered.map(l => {
       const hostShowActive = l.host?.privacy?.showActiveStatus !== false;
       return {
         id: l._id.toString(),
@@ -190,6 +301,10 @@ const getActiveLives = async (req, res) => {
         channelName: l.channelName,
         mode: l.mode,
         status: l.status,
+        privacy: l.privacy || 'public',
+        groupId: l.group?._id ? l.group._id.toString() : (l.group ? l.group.toString() : null),
+        groupName: l.group?.name || null,
+        groupAvatar: l.group?.avatar || null,
         viewersCount: l.viewersCount || 0,
         likesCount: l.likesCount || 0,
         startedAt: l.startedAt,
@@ -219,11 +334,48 @@ const getLiveDetail = async (req, res) => {
     const userId = await getUserIdFromReq(req);
 
     const live = await LiveStream.findById(id)
-      .populate('host', 'username avatar email isOnline')
+      .populate('host', 'username avatar email isOnline friends')
+      .populate('group', 'name avatar members owner')
       .lean();
 
     if (!live) {
       return res.status(404).json({ success: false, code: 'LIVESTREAM_NOT_FOUND', message: 'Live stream not found' });
+    }
+
+    // Check permission to view
+    const hostId = live.host?._id ? live.host._id.toString() : '';
+    const isHost = userId && hostId === userId.toString();
+
+    if (!isHost) {
+      if (live.privacy === 'group' || live.group) {
+        if (!userId) {
+          return res.status(403).json({ success: false, code: 'LIVESTREAM_ACCESS_DENIED', message: 'Vui lòng đăng nhập để xem trực tiếp' });
+        }
+        const grp = live.group;
+        const isMember = grp && (
+          grp.owner?.toString() === userId.toString() ||
+          (Array.isArray(grp.members) && grp.members.some(m => (m.user?._id || m.user)?.toString() === userId.toString()))
+        );
+        if (!isMember) {
+          return res.status(403).json({ success: false, code: 'LIVESTREAM_ACCESS_DENIED', message: 'Buổi trực tiếp này chỉ dành cho thành viên trong nhóm' });
+        }
+      } else if (live.privacy === 'custom') {
+        if (!userId) {
+          return res.status(403).json({ success: false, code: 'LIVESTREAM_ACCESS_DENIED', message: 'Vui lòng đăng nhập để xem trực tiếp' });
+        }
+        const allowed = Array.isArray(live.allowedViewers) ? live.allowedViewers.map(v => v.toString()) : [];
+        if (!allowed.includes(userId.toString())) {
+          return res.status(403).json({ success: false, code: 'LIVESTREAM_ACCESS_DENIED', message: 'Bạn không có quyền xem buổi trực tiếp này' });
+        }
+      } else if (live.privacy === 'friends') {
+        if (!userId) {
+          return res.status(403).json({ success: false, code: 'LIVESTREAM_ACCESS_DENIED', message: 'Vui lòng đăng nhập để xem trực tiếp' });
+        }
+        const hostFriends = Array.isArray(live.host?.friends) ? live.host.friends.map(f => f.toString()) : [];
+        if (!hostFriends.includes(userId.toString())) {
+          return res.status(403).json({ success: false, code: 'LIVESTREAM_ACCESS_DENIED', message: 'Buổi trực tiếp này chỉ dành cho bạn bè' });
+        }
+      }
     }
 
     if (live.status === 'ended') {
@@ -264,6 +416,9 @@ const getLiveDetail = async (req, res) => {
         channelName: live.channelName,
         mode: live.mode,
         status: live.status,
+        privacy: live.privacy || 'public',
+        groupId: live.group?._id ? live.group._id.toString() : (live.group ? live.group.toString() : null),
+        groupName: live.group?.name || null,
         viewersCount: live.viewersCount || 0,
         likesCount: live.likesCount || 0,
         reactionsCount: live.reactionsCount || {},
@@ -314,13 +469,33 @@ const endLive = async (req, res) => {
         ? `${caption.trim()}\n\n🔴 Live stream: "${live.title}" (${durationStr})`
         : `🔴 Live stream: "${live.title}"\n⏱ Duration: ${durationStr}\n👥 Peak viewers: ${live.maxViewers || live.viewersCount || 1}`;
 
+      let postType = 'user';
+      let postGroup = null;
+      let postPrivacy = 'public';
+      let allowedFriends = [];
+
+      if (live.group) {
+        postType = 'group';
+        postGroup = live.group;
+        postPrivacy = 'public';
+      } else if (live.privacy === 'friends') {
+        postPrivacy = 'friends';
+      } else if (live.privacy === 'custom') {
+        postPrivacy = 'specific_friends';
+        allowedFriends = live.allowedViewers || [];
+      } else if (privacy) {
+        postPrivacy = privacy;
+      }
+
       const newPost = new Post({
         author: userId,
         content: postContent,
         images: live.thumbnail ? [live.thumbnail] : [],
         videos: [],
-        postType: 'user',
-        privacy: privacy || 'public',
+        postType,
+        group: postGroup,
+        privacy: postPrivacy,
+        allowedFriends,
         status: 'approved'
       });
 

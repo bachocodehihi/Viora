@@ -1,6 +1,7 @@
 class ApiConfig {
 
-  static const String socketUrl = 'https://viora-0kc4.onrender.com';
+  // static const String socketUrl = 'https://viora-0kc4.onrender.com';
+  static const String socketUrl = 'http://192.168.1.9:5000';
   static const String baseUrl = '$socketUrl/api'; 
 
   static const String sendOtp = '$baseUrl/auth/send-otp';
@@ -58,6 +59,11 @@ class ApiConfig {
   static const String stopShareLocation = '$baseUrl/message/stop-share-location';
   static const String updateLiveLocation = '$baseUrl/message/update-live-location';
   static const String votePoll = '$baseUrl/message/vote-poll';
+  static const String muteConversation = '$baseUrl/message/mute-conversation';
+  static const String unmuteConversation = '$baseUrl/message/unmute-conversation';
+  static const String getMuteStatus = '$baseUrl/message/mute-status';
+  static const String deleteConversation = '$baseUrl/message/delete-conversation';
+  static const String updateQuickEmoji = '$baseUrl/message/quick-emoji';
   static const String updateFcmToken = '$baseUrl/notification/update-fcm-token';
   static const String getNotifications = '$baseUrl/notification/get-notifications';
   static const String markNotificationRead = '$baseUrl/notification/mark-read';
@@ -87,6 +93,15 @@ class ApiConfig {
   static const String blockCommenter = '$baseUrl/post/block-commenter';
   static const String unblockCommenter = '$baseUrl/post/unblock-commenter';
   static const String deleteComment = '$baseUrl/post/delete-comment';
+  static const String getPostDetail = '$baseUrl/post/detail';
+  static const String findPost = '$baseUrl/post/find';
+  
+  static const String createStory = '$baseUrl/story/create';
+  static const String getStoriesFeed = '$baseUrl/story/feed';
+  static const String getUserStories = '$baseUrl/story/user';
+  static const String viewStory = '$baseUrl/story/view';
+  static const String deleteStory = '$baseUrl/story/delete';
+  static const String reactStory = '$baseUrl/story/react';
   
   static const String blockAccount = '$baseUrl/account/block-account';
   static const String unblockAccount = '$baseUrl/account/unblock-account';

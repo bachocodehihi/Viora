@@ -17,6 +17,22 @@ class SocketService {
   static Future<void>? _initFuture;
 
   static bool get isConnected => _isConnected && _socket != null;
+  static final List<Function(Map<String, dynamic> data)> _newStoryCallbacks = [];
+
+  static void onNewStory(Function(Map<String, dynamic> data) callback) {
+    if (!_newStoryCallbacks.contains(callback)) {
+      _newStoryCallbacks.add(callback);
+    }
+    _socket?.off('new_story');
+    _socket?.on('new_story', (data) {
+      if (data is Map) {
+        final payload = Map<String, dynamic>.from(data);
+        for (final cb in List.from(_newStoryCallbacks)) {
+          cb(payload);
+        }
+      }
+    });
+  }
 
   static Future<void> init() {
     final inFlight = _initFuture;
@@ -287,6 +303,38 @@ class SocketService {
       });
     }
 
+    if (_conversationMuteListeners.isNotEmpty) {
+      _socket?.off('conversation_mute_updated');
+      _socket?.on('conversation_mute_updated', (data) {
+        if (data is Map) {
+          final payload = Map<String, dynamic>.from(data);
+          for (final listener in List.from(_conversationMuteListeners)) {
+            try {
+              listener(payload);
+            } catch (e) {
+              debugPrint('[Socket] onConversationMuteUpdated callback error: $e');
+            }
+          }
+        }
+      });
+    }
+
+    if (_conversationDeletedListeners.isNotEmpty) {
+      _socket?.off('conversation_deleted');
+      _socket?.on('conversation_deleted', (data) {
+        if (data is Map) {
+          final payload = Map<String, dynamic>.from(data);
+          for (final listener in List.from(_conversationDeletedListeners)) {
+            try {
+              listener(payload);
+            } catch (e) {
+              debugPrint('[Socket] onConversationDeleted callback error: $e');
+            }
+          }
+        }
+      });
+    }
+
     if (_locationStoppedListeners.isNotEmpty) {
       _socket?.off('location_stopped');
       _socket?.on('location_stopped', (data) {
@@ -377,6 +425,38 @@ class SocketService {
               listener(payload);
             } catch (e) {
               debugPrint('[Socket] onCallMessageUpdated callback error: $e');
+            }
+          }
+        }
+      });
+    }
+
+    if (_quickEmojiListeners.isNotEmpty) {
+      _socket?.off('quick_emoji_updated');
+      _socket?.on('quick_emoji_updated', (data) {
+        if (data is Map) {
+          final payload = Map<String, dynamic>.from(data);
+          for (final listener in List.from(_quickEmojiListeners)) {
+            try {
+              listener(payload);
+            } catch (e) {
+              debugPrint('[Socket] onQuickEmojiUpdated callback error: $e');
+            }
+          }
+        }
+      });
+    }
+
+    if (_userTypingListeners.isNotEmpty) {
+      _socket?.off('user_typing');
+      _socket?.on('user_typing', (data) {
+        if (data is Map) {
+          final payload = Map<String, dynamic>.from(data);
+          for (final listener in List.from(_userTypingListeners)) {
+            try {
+              listener(payload);
+            } catch (e) {
+              debugPrint('[Socket] onUserTyping callback error: $e');
             }
           }
         }
@@ -614,6 +694,37 @@ class SocketService {
     }
   }
 
+  static final Set<Function(Map<String, dynamic>)> _quickEmojiListeners = {};
+
+  static void onQuickEmojiUpdated(Function(Map<String, dynamic> data) callback) {
+    _quickEmojiListeners.add(callback);
+    _socket?.off('quick_emoji_updated');
+    _socket?.on('quick_emoji_updated', (data) {
+      if (data is Map) {
+        final payload = Map<String, dynamic>.from(data);
+        for (final listener in List.from(_quickEmojiListeners)) {
+          try {
+            listener(payload);
+          } catch (e) {
+            debugPrint('[Socket] onQuickEmojiUpdated listener error: $e');
+          }
+        }
+      }
+    });
+  }
+
+  static void offQuickEmojiUpdated([Function(Map<String, dynamic>)? callback]) {
+    if (callback != null) {
+      _quickEmojiListeners.remove(callback);
+      if (_quickEmojiListeners.isEmpty) {
+        _socket?.off('quick_emoji_updated');
+      }
+    } else {
+      _quickEmojiListeners.clear();
+      _socket?.off('quick_emoji_updated');
+    }
+  }
+
   static void offLocationEvents([Function(Map<String, dynamic>)? callback]) {
     if (callback != null) {
       offLocationStopped(callback);
@@ -664,6 +775,68 @@ class SocketService {
     }
   }
 
+  static final Set<Function(Map<String, dynamic>)> _conversationMuteListeners = {};
+
+  static void onConversationMuteUpdated(Function(Map<String, dynamic> data) callback) {
+    _conversationMuteListeners.add(callback);
+    _socket?.off('conversation_mute_updated');
+    _socket?.on('conversation_mute_updated', (data) {
+      if (data is Map) {
+        final payload = Map<String, dynamic>.from(data);
+        for (final listener in List.from(_conversationMuteListeners)) {
+          try {
+            listener(payload);
+          } catch (e) {
+            debugPrint('[Socket] onConversationMuteUpdated callback error: $e');
+          }
+        }
+      }
+    });
+  }
+
+  static void offConversationMuteUpdated([Function(Map<String, dynamic>)? callback]) {
+    if (callback != null) {
+      _conversationMuteListeners.remove(callback);
+      if (_conversationMuteListeners.isEmpty) {
+        _socket?.off('conversation_mute_updated');
+      }
+    } else {
+      _conversationMuteListeners.clear();
+      _socket?.off('conversation_mute_updated');
+    }
+  }
+
+  static final Set<Function(Map<String, dynamic>)> _conversationDeletedListeners = {};
+
+  static void onConversationDeleted(Function(Map<String, dynamic> data) callback) {
+    _conversationDeletedListeners.add(callback);
+    _socket?.off('conversation_deleted');
+    _socket?.on('conversation_deleted', (data) {
+      if (data is Map) {
+        final payload = Map<String, dynamic>.from(data);
+        for (final listener in List.from(_conversationDeletedListeners)) {
+          try {
+            listener(payload);
+          } catch (e) {
+            debugPrint('[Socket] onConversationDeleted callback error: $e');
+          }
+        }
+      }
+    });
+  }
+
+  static void offConversationDeleted([Function(Map<String, dynamic>)? callback]) {
+    if (callback != null) {
+      _conversationDeletedListeners.remove(callback);
+      if (_conversationDeletedListeners.isEmpty) {
+        _socket?.off('conversation_deleted');
+      }
+    } else {
+      _conversationDeletedListeners.clear();
+      _socket?.off('conversation_deleted');
+    }
+  }
+
   static void emitReactMessage({
     required String messageId,
     required String reaction,
@@ -677,13 +850,35 @@ class SocketService {
     });
   }
 
+  static final Set<Function(Map<String, dynamic> data)> _userTypingListeners = {};
+
   static void onUserTyping(Function(Map<String, dynamic> data) callback) {
+    _userTypingListeners.add(callback);
     _socket?.off('user_typing');
     _socket?.on('user_typing', (data) {
       if (data is Map) {
-        callback(Map<String, dynamic>.from(data));
+        final payload = Map<String, dynamic>.from(data);
+        for (final listener in List.from(_userTypingListeners)) {
+          try {
+            listener(payload);
+          } catch (e) {
+            debugPrint('[Socket] onUserTyping callback error: $e');
+          }
+        }
       }
     });
+  }
+
+  static void offUserTyping([Function(Map<String, dynamic> data)? callback]) {
+    if (callback != null) {
+      _userTypingListeners.remove(callback);
+      if (_userTypingListeners.isEmpty) {
+        _socket?.off('user_typing');
+      }
+    } else {
+      _userTypingListeners.clear();
+      _socket?.off('user_typing');
+    }
   }
 
   static void sendTyping({required String conversationId, required bool isTyping, String? userName}) {
@@ -1524,8 +1719,6 @@ class SocketService {
   static void offKickedFromLive(Function(Map<String, dynamic> data) callback) {
     _kickedFromLiveCallbacks.remove(callback);
   }
-
-  // ==================== CALL EVENTS ====================
 
   static final List<Function(Map<String, dynamic> data)> _incomingCallCallbacks = [];
   static final List<Function(Map<String, dynamic> data)> _callAcceptedCallbacks = [];

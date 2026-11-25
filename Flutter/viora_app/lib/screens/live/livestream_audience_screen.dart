@@ -90,7 +90,8 @@ class _LivestreamAudienceScreenState extends State<LivestreamAudienceScreen> {
     if (!mounted) return;
 
     if (res == null || res['success'] != true) {
-      AppToast.error(context, l10n.cannotLoadLiveStream);
+      final errorMsg = res?['message']?.toString() ?? l10n.cannotLoadLiveStream;
+      AppToast.error(context, errorMsg);
       Navigator.pop(context);
       return;
     }
@@ -109,7 +110,12 @@ class _LivestreamAudienceScreenState extends State<LivestreamAudienceScreen> {
     final live = res['liveStream'] as Map<String, dynamic>?;
 
     if (live != null) {
-      _title = live['title']?.toString() ?? _title;
+      final rawTitle = live['title']?.toString();
+      if (rawTitle == null || rawTitle.isEmpty || rawTitle == 'Buổi phát trực tiếp' || rawTitle == 'Live Stream') {
+        _title = l10n.liveStreamTitleDefault;
+      } else {
+        _title = rawTitle;
+      }
       _viewersCount = (live['viewersCount'] as num?)?.toInt() ?? 0;
       _likesCount = (live['likesCount'] as num?)?.toInt() ?? 0;
 

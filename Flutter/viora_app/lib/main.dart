@@ -12,6 +12,7 @@ import 'providers/signup_provider.dart';
 import 'services/notification_service.dart';
 import 'services/call_service.dart';
 import 'services/activity_tracker_service.dart';
+import 'services/session_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() async {
@@ -22,6 +23,7 @@ void main() async {
   unawaited(NotificationService.initialize());
   unawaited(CallService.initialize());
   unawaited(ActivityTrackerService.instance.initialize());
+  unawaited(SessionService.initPrivacyCache());
 
   await LanguageManager.init();
 
